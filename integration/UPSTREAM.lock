@@ -1,0 +1,4 @@
+upstream=https://github.com/Freaction/Aquilum
+upstream_commit=a2ac434ba70c189a5e96e8712ec781ca608ad15c
+ 78914aef4466eb960965702401634c2cb348e9b1 aquilum-app/vendor/foliate-js (heads/main)
+import_platform=GitHub_Actions_Ubuntu

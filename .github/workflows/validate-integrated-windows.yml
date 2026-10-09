@@ -1,0 +1,57 @@
+name: Build integrated Aquilum Windows desktop
+
+on:
+  push:
+    branches: ['integration/aquilum-perf']
+    paths:
+      - '.github/workflows/validate-integrated-windows.yml'
+      - 'aquilum-app/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-build:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate directly integrated source, not patches
+        shell: pwsh
+        run: |
+          if (!(Test-Path "aquilum-app/src/components/Editor/extensions/quoteScanPresence.ts")) { throw "Integrated CodeMirror fast path missing" }
+          $rust = Get-Content "aquilum-app/core/src/search/matching.rs" -Raw
+          if (!$rust.Contains("struct OffsetException")) { throw "Integrated Rust sparse search missing" }
+          if (!(Test-Path "aquilum-app/vendor/foliate-js")) { throw "Vendored reader source missing" }
+          "AQUILUM_VERIFIED_INTEGRATION $((git rev-parse HEAD).Trim())"
+      - name: Install pinned frontend packages
+        shell: pwsh
+        run: |
+          Push-Location aquilum-app
+          npm ci --no-audit --no-fund
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Build real optimized Windows Tauri application
+        shell: pwsh
+        run: |
+          Push-Location aquilum-app
+          npx tauri build --no-bundle 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\integrated-windows-build.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+          $exe = Get-ChildItem -Path "aquilum-app/src-tauri/target/release" -Filter "aquilum-app.exe" -Recurse -File | Select-Object -First 1
+          if (!$exe) { throw "Expected actual Aquilum Windows executable was not produced" }
+          "AQUILUM_WINDOWS_DESKTOP_BUILT path=$($exe.FullName) size=$($exe.Length)"
+      - name: Preserve actual desktop build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-aquilum-windows-build
+          if-no-files-found: warn
+          path: integrated-windows-build.log

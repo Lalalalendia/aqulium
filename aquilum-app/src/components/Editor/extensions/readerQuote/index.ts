@@ -1,0 +1,1 @@
+export { readerQuoteTheme } from './theme';

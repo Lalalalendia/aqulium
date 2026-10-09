@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Local / editor
+.DS_Store
+*.local
+.env.local
+.env.*.local
+.idea/
+
+# Cursor / agents
+/.agents/
+
+# All build outputs (dev + release Cargo caches, Vite dist, packaged releases)
+/.artifacts/
+
+# Safety net: old locations before .artifacts layout (must never return to git)
+/aquilum-app/dist/
+/aquilum-app/dist-ssr/
+/aquilum-app/.build/
+/aquilum-app/releases/
+/aquilum-app/src-tauri/target/
+/aquilum-app/core/target/
+/aquilum-app/core/Cargo.lock
+
+coverage/
+*.tsbuildinfo
+
+# Signing keys must never enter the repo (Tauri updater keypair, code-signing certs)
+*.key
+*.key.pub
+*.pfx
+*.p12
+.tauri/
+.env
+
+# Сборка плагина Obsidian, лежит локально как справочный материал
+/dataview/
+
+# Отладочные черновики разбора frontmatter
+aquilum-app/tmp-fm.*
+
+# История заметок Aquilum: локальная, в git не идёт
+.aquilum/
+
+# Рабочая копия публичного репозитория релизов
+/release-repo-update/
