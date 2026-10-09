@@ -16,3 +16,7 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[package.metadata.wasm-pack.profile.release]
+# Current rustc emits bulk-memory operations; wasm-opt must validate them.
+wasm-opt = ["-O", "--enable-bulk-memory"]
