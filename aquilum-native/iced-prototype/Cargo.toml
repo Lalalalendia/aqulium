@@ -1,0 +1,10 @@
+[package]
+name = "aquilum-native-iced"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+aquilum-native-common = { path = "../common" }
+iced = { version = "=0.14.0" }

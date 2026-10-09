@@ -1,0 +1,12 @@
+[package]
+name = "aquilum-native-common"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+aquilum-core = { path = "../../aquilum-app/core" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,10 @@
+[package]
+name = "aquilum-native-gpui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+aquilum-native-common = { path = "../common" }
+gpui = { version = "=0.2.2", default-features = false }

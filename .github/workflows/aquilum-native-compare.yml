@@ -1,0 +1,97 @@
+name: Aquilum Native - shared core, Iced and GPUI builds
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-strangler']
+    paths:
+      - '.github/workflows/aquilum-native-compare.yml'
+      - 'aquilum-native/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shared-core-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test real Aquilum DocumentHub native adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -- --test-threads=1 2>&1 | tee native-core-linux.log
+      - name: Upload native backend verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-core-linux
+          path: native-core-linux.log
+
+  shared-core-windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test native core adapter on actual Windows paths
+        shell: pwsh
+        run: |
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -- --test-threads=1 2>&1 | Tee-Object -FilePath native-core-windows.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve Windows verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-core-windows
+          path: native-core-windows.log
+
+  iced-build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile real Iced multiline editor
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-iced --release 2>&1 | Tee-Object -FilePath native-iced-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = "aquilum-native/target/release/aquilum-native-iced.exe"
+          if (!(Test-Path $exe)) { throw "Iced executable missing" }
+          Write-Host "AQUILUM_NATIVE_ICED_BUILD_OK $((Get-Item $exe).Length)"
+      - name: Preserve executable and build receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-iced-windows
+          if-no-files-found: warn
+          path: |
+            aquilum-native/target/release/aquilum-native-iced.exe
+            native-iced-build.log
+
+  gpui-build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile GPUI document shell over the same core
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-gpui --release 2>&1 | Tee-Object -FilePath native-gpui-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = "aquilum-native/target/release/aquilum-native-gpui.exe"
+          if (!(Test-Path $exe)) { throw "GPUI executable missing" }
+          Write-Host "AQUILUM_NATIVE_GPUI_BUILD_OK $((Get-Item $exe).Length)"
+      - name: Preserve executable and build receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-gpui-windows
+          if-no-files-found: warn
+          path: |
+            aquilum-native/target/release/aquilum-native-gpui.exe
+            native-gpui-build.log
