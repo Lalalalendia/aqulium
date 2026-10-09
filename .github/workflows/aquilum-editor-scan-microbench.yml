@@ -1,0 +1,46 @@
+name: Aquilum isolated TypeScript scan microbench
+
+on:
+  push:
+    branches: ['experiments/editor-scan-microbench-20261009']
+    paths:
+      - '.github/workflows/aquilum-editor-scan-microbench.yml'
+      - 'research/editor-scan-microbench-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Checkout exact Aquilum source
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          test "$(git -C aquilum rev-parse HEAD)" = "a2ac434ba70c189a5e96e8712ec781ca608ad15c"
+      - name: Build identical 5MB document fixture
+        run: |
+          python3 research/ram-20261009/make_fixture.py lab-vault
+          python3 research/editor-scan-microbench-20261009/install_test.py aquilum
+      - name: Run 17x Node microbench per scanner
+        working-directory: aquilum/aquilum-app
+        env:
+          AQUILUM_SCAN_FIXTURE: ../../lab-vault/benchmark-5mb.md
+        run: |
+          set -o pipefail
+          npm ci --no-audit --no-fund
+          npx vitest run src/components/Editor/extensions/editorScans.lab.test.ts 2>&1 | tee ../../scan-profile.log
+      - name: Upload scan microbenchmark output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-editor-scan-microbench
+          path: scan-profile.log
+          if-no-files-found: warn
