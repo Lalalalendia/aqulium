@@ -1,0 +1,66 @@
+name: Aquilum search normalization RAM A-B
+
+on:
+  push:
+    branches: ['experiments/search-match-ram-20261009']
+    paths:
+      - '.github/workflows/aquilum-search-match-ram.yml'
+      - 'research/search-match-ram-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clone original pinned Aquilum
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Add test-only compact search normalizer
+        shell: pwsh
+        run: |
+          python research/search-match-ram-20261009/install_patch.py aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check Unicode match parity
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          cargo test -p aquilum-core ram_lab_unicode_parity --release -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\matching-unicode-parity.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Benchmark baseline versus compact in separate test processes
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          foreach ($size in @(1000000, 5000000)) {
+            foreach ($strategy in @("baseline", "compact")) {
+              $env:AQUILUM_MATCH_SIZE_BYTES = "$size"
+              $env:AQUILUM_SEARCH_RAM_VARIANT = $strategy
+              "AQUILUM_MATCH_CASE size=$size strategy=$strategy" | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\matching-ram-results.log" -Append
+              cargo test -p aquilum-core ram_lab_snapshot_search --release -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\matching-ram-results.log" -Append
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+          Pop-Location
+      - name: Upload search RAM benchmark outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-search-ram-ab
+          if-no-files-found: warn
+          path: |
+            matching-unicode-parity.log
+            matching-ram-results.log
