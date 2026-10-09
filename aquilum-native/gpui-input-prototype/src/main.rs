@@ -37,7 +37,7 @@ impl NativeEditor {
             let index = tabs.len();
             let editor = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .multi_line(true)
+                    .multi_line()
                     .default_value(initial)
             });
             let subscription = cx.subscribe(&editor, move |this, _, event: &InputEvent, cx| {
@@ -125,7 +125,7 @@ impl Render for NativeEditor {
                         cx.notify();
                     }))
                     .child("Reload if clean"))
-                .child(div().child(&self.status))
+                .child(div().child(self.status.clone()))
             )
             .child(div().id("markdown-editor").flex_1().min_h(px(220.0))
                 .child(Input::new(&text_input).h_full()))
@@ -142,7 +142,7 @@ fn main() {
             },
             |window, cx| {
                 let editor = cx.new(|cx| NativeEditor::new(window, cx));
-                cx.new(|cx| Root::new(editor, window, cx))
+                cx.new(|cx| Root::new(editor.into(), window, cx))
             },
         ).expect("Cannot open native GPUI editor window");
         cx.activate(true);
