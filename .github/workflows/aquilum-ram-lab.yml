@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   native-core-memory:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -68,6 +69,8 @@ jobs:
           $sha = (git -C aquilum rev-parse HEAD).Trim()
           if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
           "AQUILUM_PINNED_SHA $sha"
+          git -C aquilum submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw "Foliate git submodule checkout failed" }
       - name: Generate deterministic 5MB Markdown fixture and patch app test mode
         shell: pwsh
         run: |
