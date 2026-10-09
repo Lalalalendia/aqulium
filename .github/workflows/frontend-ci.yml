@@ -1,0 +1,44 @@
+name: Aquilum frontend tests and production build
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'aquilum-app/src/**'
+      - 'aquilum-app/package.json'
+      - 'aquilum-app/package-lock.json'
+      - 'aquilum-app/tsconfig.json'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    branches: ['main']
+    paths:
+      - 'aquilum-app/src/**'
+      - 'aquilum-app/package.json'
+      - 'aquilum-app/package-lock.json'
+      - 'aquilum-app/tsconfig.json'
+      - '.github/workflows/frontend-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aquilum-app/package-lock.json
+      - name: Install pinned frontend dependencies
+        working-directory: aquilum-app
+        run: npm ci --no-audit --no-fund
+      - name: Run complete frontend suite
+        working-directory: aquilum-app
+        run: npm test
+      - name: Verify production TypeScript and Vite build
+        working-directory: aquilum-app
+        run: npm run build
