@@ -1,0 +1,125 @@
+name: Materialize optimized Aquilum working source
+
+on:
+  push:
+    branches: ['integration/aquilum-perf']
+    paths:
+      - '.github/workflows/materialize-aquilum-source.yml'
+      - 'integration/patches/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import-and-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Import full pinned upstream app source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f aquilum-app/src/components/Editor/extensions/quoteScanPresence.ts && grep -q 'struct OffsetException' aquilum-app/core/src/search/matching.rs; then
+            echo "Source already imported; preserving branch"
+            exit 0
+          fi
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git "$RUNNER_TEMP/original-aquilum"
+          git -C "$RUNNER_TEMP/original-aquilum" checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          test "$(git -C "$RUNNER_TEMP/original-aquilum" rev-parse HEAD)" = "a2ac434ba70c189a5e96e8712ec781ca608ad15c"
+          git -C "$RUNNER_TEMP/original-aquilum" submodule update --init --recursive
+          test -d "$RUNNER_TEMP/original-aquilum/aquilum-app/vendor/foliate-js"
+          mkdir -p research
+          cp README.md research/initial-lab-readme.md
+          # Retain our independent lab workflows; never import upstream release workflows.
+          # Vendored submodule source is materialized as files for self-contained checkout.
+          rsync -a --exclude='.git' --exclude='/.github/' --exclude='/README.md' --exclude='/.gitmodules' "$RUNNER_TEMP/original-aquilum/" ./
+          test -f LICENSE
+          test -f aquilum-app/package.json
+          test -f aquilum-app/core/src/search/matching.rs
+          test -d aquilum-app/vendor/foliate-js
+          python3 integration/patches/quote/apply.py .
+          python3 integration/patches/search/apply_sparse.py .
+          test -f aquilum-app/src/components/Editor/extensions/quoteScanPresence.ts
+          grep -q 'struct OffsetException' aquilum-app/core/src/search/matching.rs
+          cat > README.md <<'README'
+          # Aquilum: independent optimized version
+
+          Working downstream copy of [Freaction/Aquilum](https://github.com/Freaction/Aquilum), pinned to upstream commit a2ac434ba70c189a5e96e8712ec781ca608ad15c (v0.2.6). Not an official Aquilum release.
+
+          The full editor source, including UI, Rust core, Tauri, tests and assets, is in [aquilum-app/](aquilum-app/).
+
+          ## Integrated improvements
+
+          - CodeMirror book and reader quote presence tracking avoids unnecessary full-document scans when editing ordinary text, without disabling quote functionality.
+          - Rust sparse Unicode offset mapping reduces transient memory during search.
+
+          ## Development
+
+          In aquilum-app/: npm ci, npm test, npm run build.
+          Rust core: cargo test --manifest-path aquilum-app/core/Cargo.toml -p aquilum-core.
+
+          ## Provenance and license
+
+          Original copyright remains with the Aquilum contributors. Original AGPL-3.0-only license applies; see [LICENSE](LICENSE). Foliate JS is materialized as regular source files from its upstream submodule checkout; exact upstream and submodule SHAs are recorded in [integration/UPSTREAM.lock](integration/UPSTREAM.lock).
+
+          Benchmark results and experimental scripts remain in research/ and integration/, with additional experiment branches. The rar2 repository is not involved.
+          README
+          {
+            echo "upstream=https://github.com/Freaction/Aquilum"
+            echo "upstream_commit=$(git -C "$RUNNER_TEMP/original-aquilum" rev-parse HEAD)"
+            git -C "$RUNNER_TEMP/original-aquilum" submodule status
+            echo "import_platform=GitHub_Actions_Ubuntu"
+          } > integration/UPSTREAM.lock
+          echo "AQUILUM_IMPORTED=1"
+          echo "AQUILUM_SOURCE_FILE_COUNT=$(find aquilum-app -type f | wc -l)"
+      - name: Commit real source into integration branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          changes=$(git diff --cached --name-only | wc -l)
+          echo "AQUILUM_IMPORT_CHANGED_FILES=$changes"
+          if test "$changes" -gt 0; then
+            test -f aquilum-app/src/components/Editor/extensions/quoteScanPresence.ts
+            test -f aquilum-app/core/src/search/matching_sparse_tests.rs
+            test -f LICENSE
+            git commit -m "SOURCE: import pinned Aquilum with validated RAM and editor optimizations"
+            git push origin HEAD:refs/heads/integration/aquilum-perf
+          fi
+          echo "AQUILUM_INTEGRATED_HEAD=$(git rev-parse HEAD)"
+      - name: Full frontend tests and build on integrated code
+        working-directory: aquilum-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test 2>&1 | tee ../integration/all-frontend-tests.log
+          npm run build 2>&1 | tee ../integration/frontend-build.log
+      - name: Rust core tests on integrated code
+        working-directory: aquilum-app/core
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p aquilum-core --release -- --test-threads=1 2>&1 | tee ../../integration/rust-core-tests.log
+      - name: Preserve validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-integrated-source-validation
+          if-no-files-found: warn
+          path: |
+            integration/UPSTREAM.lock
+            integration/all-frontend-tests.log
+            integration/frontend-build.log
+            integration/rust-core-tests.log
