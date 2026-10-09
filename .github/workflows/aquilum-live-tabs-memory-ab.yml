@@ -7,6 +7,7 @@ on:
       - '.github/workflows/aquilum-live-tabs-memory-ab.yml'
       - 'research/live-tabs-ram-20261009/**'
       - 'research/ram-20261009/**'
+      - 'research/ram-20261009/**'
   workflow_dispatch:
 
 permissions:
