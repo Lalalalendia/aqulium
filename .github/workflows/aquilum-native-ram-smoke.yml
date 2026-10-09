@@ -1,0 +1,84 @@
+name: Aquilum Native - actual Windows process RAM smoke
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-strangler']
+    paths:
+      - '.github/workflows/aquilum-native-ram-smoke.yml'
+      - 'research/aquilum-native/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  memory-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate newest successful native UI build on this branch
+        id: run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = "application/vnd.github+json" }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/workflows/aquilum-native-compare.yml/runs?branch=experiments%2Faquilum-native-strangler&status=success&per_page=10"
+          $response = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+          $match = $response.workflow_runs | Where-Object { $_.conclusion -eq 'success' } | Select-Object -First 1
+          if (!$match) { throw "No successful full Windows native build available for this branch" }
+          "run_id=$($match.id)" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+          Write-Host "AQUILUM_NATIVE_SOURCE_RUN $($match.html_url)"
+      - uses: actions/download-artifact@v4
+        with:
+          name: aquilum-native-iced-windows
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: downloaded/iced
+      - uses: actions/download-artifact@v4
+        with:
+          name: aquilum-native-gpui-windows
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: downloaded/gpui
+      - name: Generate identical 1, 5 and 20 MiB Markdown fixture copies
+        shell: pwsh
+        run: |
+          python research/aquilum-native/fixture.py native-fixtures
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path native-ram-results -Force | Out-Null
+          Get-ChildItem native-fixtures/*.md | Get-FileHash -Algorithm SHA256 |
+            Select-Object Path, Hash | ConvertTo-Json | Set-Content native-ram-results/fixture-hashes-before.json
+      - name: Start both native Windows UIs and sample process memory
+        shell: pwsh
+        run: |
+          $iced = Get-ChildItem downloaded/iced -Filter aquilum-native-iced.exe -File -Recurse | Select-Object -First 1
+          $gpui = Get-ChildItem downloaded/gpui -Filter aquilum-native-gpui.exe -File -Recurse | Select-Object -First 1
+          if (!$iced -or !$gpui) { throw "Downloaded binary missing" }
+          & research/aquilum-native/measure-windows.ps1 -IcedExe $iced.FullName -GpuiExe $gpui.FullName -FixtureDir native-fixtures -OutputDir native-ram-results
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify test fixtures were unchanged
+        if: always()
+        shell: pwsh
+        run: |
+          if (!(Test-Path native-ram-results/fixture-hashes-before.json)) { exit 0 }
+          $before = Get-Content native-ram-results/fixture-hashes-before.json -Raw | ConvertFrom-Json
+          $after = Get-ChildItem native-fixtures/*.md | Get-FileHash -Algorithm SHA256
+          foreach ($original in $before) {
+            $latest = $after | Where-Object { $_.Path -eq $original.Path }
+            if (!$latest -or $latest.Hash -ne $original.Hash) {
+              throw "Fixture changed: $($original.Path)"
+            }
+          }
+          "AQUILUM_NATIVE_INPUTS_UNCHANGED"
+      - name: Preserve raw Windows RAM measurements and fixture metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-windows-ram-smoke
+          if-no-files-found: warn
+          path: |
+            native-ram-results/
+            native-fixtures/manifest.json
