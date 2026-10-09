@@ -21,6 +21,7 @@ pub enum ModelError {
     InvalidLine,
     InvalidWindowBudget,
     EmptyEdit,
+    ViewBudgetExceeded,
 }
 
 impl std::fmt::Display for ModelError {
@@ -179,6 +180,46 @@ impl TextModel {
         })
     }
 
+
+    /// Convert a bounded GPUI Input snapshot to a single UTF-16 ChangeSet.
+    /// Both offsets are scalar boundaries, never UTF-16 surrogate interiors.
+    pub fn propose_viewport_snapshot_change(
+        &self,
+        view: &Viewport,
+        edited_text: &str,
+        max_chars: usize,
+    ) -> Result<Option<ProposedEdit>, ModelError> {
+        if max_chars == 0 { return Err(ModelError::InvalidWindowBudget); }
+        if view.revision != self.revision
+            || view.end_char < view.start_char
+            || view.end_char > self.rope.len_chars()
+            || view.end_char - view.start_char != view.text.chars().count()
+            || self.rope.slice(view.start_char..view.end_char) != view.text.as_str()
+        {
+            return Err(ModelError::StaleViewport);
+        }
+        // Reject huge paste before allocating a char buffer.
+        if edited_text.chars().take(max_chars.saturating_add(1)).count() > max_chars {
+            return Err(ModelError::ViewBudgetExceeded);
+        }
+        if edited_text == view.text { return Ok(None); }
+        let before: Vec<char> = view.text.chars().collect();
+        let after: Vec<char> = edited_text.chars().collect();
+        let mut prefix = 0usize;
+        while prefix < before.len() && prefix < after.len()
+            && before[prefix] == after[prefix] { prefix += 1; }
+        let mut suffix = 0usize;
+        while suffix < before.len() - prefix && suffix < after.len() - prefix
+            && before[before.len()-1-suffix] == after[after.len()-1-suffix] {
+            suffix += 1;
+        }
+        let from = before[..prefix].iter().map(|c| c.len_utf16()).sum::<usize>();
+        let to = from + before[prefix..before.len()-suffix]
+            .iter().map(|c| c.len_utf16()).sum::<usize>();
+        let replacement: String = after[prefix..after.len()-suffix].iter().collect();
+        self.propose_viewport_change(view, from..to, &replacement).map(Some)
+    }
+
     /// Call ONLY after the real DocumentHub acknowledged this exact edit.
     /// In-memory model is not mutated on stale/failed external commits.
     pub fn commit_proposed_edit(&mut self, edit: ProposedEdit) -> Result<u64, ModelError> {
@@ -308,4 +349,27 @@ mod tests {
         assert_eq!(model.replace_in_viewport(&fabricated,0..0,"z"),Err(ModelError::StaleViewport));
         assert_eq!(dump(&model),"A 🌍 end");
     }
+
+    #[test]
+    fn widget_snapshot_generates_small_unicode_delta_from_distant_page() {
+        let mut model=TextModel::from_str(&("x\n".repeat(25_000)+"A🌍B\n"));
+        let view=model.window_at_line(model.len_lines()-2,1,32).unwrap();
+        let edit=model.propose_viewport_snapshot_change(&view,"A🌎B\n",64).unwrap().unwrap();
+        assert!(edit.utf16_range().start>40_000);
+        assert_eq!(edit.utf16_range().end-edit.utf16_range().start,2);
+        assert_eq!(edit.to_changeset_json().as_array().unwrap()[1],serde_json::json!([2,"🌎"]));
+        model.commit_proposed_edit(edit).unwrap();
+        assert_eq!(dump(&model),"x\n".repeat(25_000)+"A🌎B\n");
+    }
+    #[test]
+    fn widget_snapshot_rejects_huge_paste_stale_window_and_uses_noop() {
+        let mut model=TextModel::from_str("A🌍B\n");
+        let view=model.window_at_char(0,8).unwrap();
+        assert!(matches!(model.propose_viewport_snapshot_change(&view,&"a".repeat(32),16),Err(ModelError::ViewBudgetExceeded)));
+        assert!(matches!(model.propose_viewport_snapshot_change(&view,&view.text,16),Ok(None)));
+        let edit=model.propose_viewport_snapshot_change(&view,"A🌎B\n",16).unwrap().unwrap();
+        model.commit_proposed_edit(edit).unwrap();
+        assert!(matches!(model.propose_viewport_snapshot_change(&view,"A🌍B\n",16),Err(ModelError::StaleViewport)));
+    }
+
 }
