@@ -8,3 +8,6 @@ license = "AGPL-3.0-only"
 [dependencies]
 aquilum-native-common = { path = "../common" }
 iced = "=0.14.0"
+
+[dev-dependencies]
+tempfile = "3"
