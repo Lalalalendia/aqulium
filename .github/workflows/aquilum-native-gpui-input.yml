@@ -1,0 +1,49 @@
+name: Aquilum Native - GPUI real multiline text editor
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-gpui-text-input']
+    paths:
+      - 'aquilum-native/**'
+      - '.github/workflows/aquilum-native-gpui-input.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gpui-input-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build real GPUI multiline Markdown prototype
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-gpui-input --release 2>&1 | Tee-Object -FilePath gpui-input-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = "aquilum-native/target/release/aquilum-native-gpui-input.exe"
+          if (!(Test-Path $exe)) { throw "Compiled app missing" }
+          Write-Host "AQUILUM_GPUI_INPUT_WINDOWS_BUILD_OK size=$((Get-Item $exe).Length)"
+      - name: Upload binary and exact build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-gpui-input-native-windows
+          if-no-files-found: warn
+          path: |
+            aquilum-native/target/release/aquilum-native-gpui-input.exe
+            gpui-input-build.log
+
+  native-core-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify shared document state remains safe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -- --test-threads=1
