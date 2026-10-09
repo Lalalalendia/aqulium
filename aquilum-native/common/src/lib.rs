@@ -4,6 +4,7 @@
 //! WARNING: prototype with explicit Save only, not suitable for valuable notes.
 
 pub mod text_positions;
+pub mod line_viewport;
 
 use aquilum_core::app_core::{Core, CoreEvent, EventSink};
 use aquilum_core::history::Source;
