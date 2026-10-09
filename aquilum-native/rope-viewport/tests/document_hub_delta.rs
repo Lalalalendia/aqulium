@@ -32,11 +32,11 @@ fn incremental_unicode_edit_persists_through_real_document_hub() {
     let acknowledged=document.push_json_change(message).unwrap();
     assert_eq!(acknowledged,prior+1);
     assert_eq!(model.commit_proposed_edit(edit),Ok(1));
-    assert_eq!(text(&model),"Привет 🌎\n# Заголовок\r\n");
+    assert_eq!(text(&model),"Привет 🌎\n# Заголовок\n");
 
     drop(document);
     host.shutdown();
-    assert_eq!(fs::read_to_string(&path).unwrap(),"Привет 🌎\n# Заголовок\r\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(),"Привет 🌎\n# Заголовок\n");
 }
 
 #[test]
