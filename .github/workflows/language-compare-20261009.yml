@@ -1,0 +1,122 @@
+name: Aquilum TypeScript vs ReScript vs Rust-Wasm A-B-C
+
+on:
+  push:
+    branches: ['experiments/ts-rescript-rust-wasm-20261009']
+    paths:
+      - '.github/workflows/language-compare-20261009.yml'
+      - 'research/language-bench-20261009/src/**'
+      - 'research/language-bench-20261009/rust/src/**'
+      - 'research/language-bench-20261009/rust/Cargo.toml'
+      - 'research/language-bench-20261009/package.json'
+      - 'research/language-bench-20261009/rescript.json'
+      - 'research/language-bench-20261009/build-js.mjs'
+      - 'research/language-bench-20261009/fixture.mjs'
+      - 'research/language-bench-20261009/validate.mjs'
+      - 'research/language-bench-20261009/measure-one.mjs'
+      - 'research/language-bench-20261009/runner.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  comparative-language-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Install pinned ReScript, TypeScript and bundler
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          node --version
+          ./node_modules/.bin/rescript -version
+          ./node_modules/.bin/esbuild --version
+      - name: Compile real ReScript and both equivalent optimized JS bundles
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s%3N)
+          npm run build:rescript
+          echo "AQUILUM_RESCRIPT_COMPILER_MS=$(($(date +%s%3N) - start))"
+          test -f src/QuoteScan.res.js
+          npm run build:js
+          test -f dist/ts.mjs
+          test -f dist/rescript.mjs
+      - name: Build Rust scanner as real WebAssembly with wasm-bindgen Node glue
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s%3N)
+          wasm-pack build rust --target nodejs --release --out-dir pkg --out-name aquilum_scan_bench
+          echo "AQUILUM_WASM_COMPILER_MS=$(($(date +%s%3N) - start))"
+          test -f rust/pkg/aquilum_scan_bench_bg.wasm
+          test -f rust/pkg/aquilum_scan_bench.js
+          rustc --version
+          cargo --version
+          wasm-pack --version
+      - name: Verify all implementations against the independent Markdown oracle
+        working-directory: research/language-bench-20261009
+        run: node validate.mjs
+      - name: Measure speed, process RAM, sampled JS allocations and deliverable size
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          node runner.mjs 2>&1 | tee benchmark-run.log
+          test -s output/results.csv
+          test -s output/results.json
+          test -s output/results.md
+          {
+            echo "SOURCE_SHA=$GITHUB_SHA"
+            node --version
+            npm --version
+            rustc --version
+            cargo --version
+            wasm-pack --version
+            npm ls --depth=0
+          } > output/build-info.txt
+          cp benchmark-run.log output/benchmark-run.log
+      - name: Publish reproducible measured results to experiment branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/language-bench-20261009/output
+          if ! git diff --cached --quiet; then
+            git commit -m "MEASURE: record TypeScript ReScript and Rust-Wasm comparative results"
+            git push origin HEAD:refs/heads/experiments/ts-rescript-rust-wasm-20261009
+          fi
+      - name: Upload compiled artifacts and raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-language-triple-benchmark
+          if-no-files-found: warn
+          path: |
+            research/language-bench-20261009/dist/
+            research/language-bench-20261009/src/QuoteScan.res.js
+            research/language-bench-20261009/rust/pkg/
+            research/language-bench-20261009/output/
+            research/language-bench-20261009/benchmark-run.log
