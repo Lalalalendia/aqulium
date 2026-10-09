@@ -1,0 +1,44 @@
+name: Verify integrated Aquilum Rust core on Windows
+
+on:
+  push:
+    branches: ['integration/aquilum-perf']
+    paths:
+      - '.github/workflows/validate-integrated-windows-core.yml'
+      - 'aquilum-app/core/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-rust:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate integrated Rust source
+        shell: pwsh
+        run: |
+          if (!(Test-Path "aquilum-app/core/src/search/matching_sparse_tests.rs")) { throw "Rust sparse tests not integrated" }
+          $source = Get-Content "aquilum-app/core/src/search/matching.rs" -Raw
+          if (!$source.Contains("struct OffsetException")) { throw "Actual sparse normalization not integrated" }
+      - name: Run complete integrated Rust core release test suite
+        shell: pwsh
+        run: |
+          $env:TEMP = Join-Path $env:RUNNER_TEMP "aquilum-consistent-temp"
+          $env:TMP = $env:TEMP
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          Push-Location aquilum-app/core
+          cargo test -p aquilum-core --release -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\windows-integrated-rust-core.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Upload Rust test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-aquilum-windows-rust-core
+          if-no-files-found: warn
+          path: windows-integrated-rust-core.log
