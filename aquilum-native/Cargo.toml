@@ -1,5 +1,5 @@
 [workspace]
-members = ["common", "iced-prototype", "gpui-prototype", "gpui-input-prototype"]
+members = ["common", "iced-prototype", "gpui-prototype", "gpui-input-prototype", "iced-viewport-prototype"]
 default-members = ["common"]
 resolver = "2"
 
