@@ -1,0 +1,12 @@
+[package]
+name = "aquilum-native-gpui-rope"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+aquilum-native-common = { path = "../common" }
+aquilum-native-rope-viewport = { path = "../rope-viewport" }
+gpui = "=0.2.2"
+gpui-component = "=0.4.0-preview2"
