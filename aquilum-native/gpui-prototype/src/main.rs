@@ -55,7 +55,7 @@ impl Render for NativeGpui {
         for index in 0..self.tabs.len() {
             let title = self.tabs[index].document.path().file_name()
                 .unwrap_or_default().to_string_lossy().to_string();
-            tabs = tabs.child(div().cursor_pointer().p_2().bg(rgb(0x354057))
+            tabs = tabs.child(div().id(format!("tab-{index}")).cursor_pointer().p_2().bg(rgb(0x354057))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = index;
                     this.page = 0;
@@ -69,19 +69,19 @@ impl Render for NativeGpui {
             .child(tabs)
             .child(div().child(heading))
             .child(div().flex().gap_2()
-                .child(div().p_2().bg(rgb(0x385578)).cursor_pointer()
+                .child(div().id("prev-page").p_2().bg(rgb(0x385578)).cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.page = this.page.saturating_sub(1);
                         cx.notify();
                     }))
                     .child("Previous page"))
-                .child(div().p_2().bg(rgb(0x385578)).cursor_pointer()
+                .child(div().id("next-page").p_2().bg(rgb(0x385578)).cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.page = (this.page + 1).min(last_page);
                         cx.notify();
                     }))
                     .child("Next page"))
-                .child(div().p_2().bg(rgb(0x42644d)).cursor_pointer()
+                .child(div().id("append-line").p_2().bg(rgb(0x42644d)).cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| {
                         let tab = &mut this.tabs[this.selected];
                         tab.text.push_str("\nGPUI native prototype appended a line.\n");
@@ -89,7 +89,7 @@ impl Render for NativeGpui {
                         cx.notify();
                     }))
                     .child("Append test line"))
-                .child(div().p_2().bg(rgb(0x42644d)).cursor_pointer()
+                .child(div().id("save-document").p_2().bg(rgb(0x42644d)).cursor_pointer()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.save();
                         cx.notify();
