@@ -22,6 +22,13 @@ pub enum ModelError {
     InvalidWindowBudget,
 }
 
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+impl std::error::Error for ModelError {}
+
 #[derive(Debug, Clone)]
 pub struct Viewport {
     pub revision: u64,
