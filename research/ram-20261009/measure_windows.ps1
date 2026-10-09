@@ -100,7 +100,7 @@ finally {
         }
     }
     if ($app -ne $null) {
-        try { if (!$app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue } } catch {}
+        try { if (!$app.HasExited) { & taskkill.exe /PID $app.Id /T /F | Out-Null } } catch {}
     }
     if ($server -ne $null) { try { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue } catch {} }
 }

@@ -1,0 +1,102 @@
+name: Aquilum editor large-document A-B and RAM
+
+on:
+  push:
+    branches: ['experiments/editor-ab-ram-20261009']
+    paths:
+      - '.github/workflows/aquilum-editor-ab-ram.yml'
+      - 'research/editor-ab-20261009/**'
+      - 'research/ram-20261009/measure_windows.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-ui-ab:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: 'never'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout pinned original Aquilum and its Foliate submodule
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "Unexpected upstream SHA $sha" }
+          git -C aquilum submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Prepare deterministic 5MB fixture and test-only editor ablation
+        shell: pwsh
+        run: |
+          python research/ram-20261009/make_fixture.py lab-vault
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python research/ram-20261009/install_ram_patch.py aquilum desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python research/editor-ab-20261009/install_ablation_patch.py aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum diff -- aquilum-app/src/components/Editor/extensions/outline/index.ts aquilum-app/src/components/Editor/extensions/bookCallout/constructs.ts aquilum-app/src/components/Editor/extensions/readerQuote/constructs.ts | Out-File -Encoding utf8 editor-ab-patch.diff
+      - name: Install dependencies and verify modified TypeScript
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx tsc --noEmit
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Build actual Windows Tauri and CodeMirror
+        shell: pwsh
+        run: |
+          $env:VITE_AQUILUM_RAM_LAB = "1"
+          $env:VITE_AQUILUM_RAM_VAULT = (Resolve-Path "lab-vault").Path
+          $env:VITE_AQUILUM_RAM_NOTE = Join-Path $env:VITE_AQUILUM_RAM_VAULT "benchmark-5mb.md"
+          Push-Location aquilum/aquilum-app
+          npx tauri build --no-bundle 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\editor-ab-build.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Profile baseline and three isolated disablement modes
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path aquilum/aquilum-app/src-tauri/target/release -Filter aquilum-app.exe -Recurse -File | Select-Object -First 1
+          if (!$exe) { throw "Cannot find Aquilum desktop executable" }
+          $modes = @("baseline", "no_fullscans", "no_renumber", "both")
+          foreach ($mode in $modes) {
+            Write-Host "AQUILUM_AB_START expected_mode=$mode"
+            $dir = Join-Path "$env:GITHUB_WORKSPACE" "editor-ab-results\$mode"
+            & research/ram-20261009/measure_windows.ps1 -ExePath $exe.FullName -OutputDir $dir -MaxSeconds 200 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\editor-ab-run-$mode.log"
+            if ($LASTEXITCODE -ne 0) { throw "Failed RAM harness in $mode" }
+            $events = @(Get-Content (Join-Path $dir "events.jsonl") | ForEach-Object { $_ | ConvertFrom-Json })
+            $measured = ($events | Where-Object { $_.stage -eq "after_120_editor_transactions" } | Select-Object -Last 1)
+            if (!$measured) { throw "No editor A/B measurements for $mode" }
+            if ($measured.details.mode -ne $mode) { throw "Mode mismatch: expected $mode, got $($measured.details.mode)" }
+            $rows = @(Import-Csv (Join-Path $dir "process-samples.csv"))
+            $editing = @($rows | Where-Object { $_.Stage -eq "editor_mounted_5mb" })
+            $meanWs = ($editing | Measure-Object -Property TotalWorkingSetMiB -Average).Average
+            $avgWeb = ($editing | Measure-Object -Property WebViewWorkingSetMiB -Average).Average
+            Write-Host ("AQUILUM_AB_RESULT mode={0} dispatch_p50_ms={1} dispatch_p95_ms={2} frame_p95_ms={3} editing_ws_mib={4:N1} editing_webview_ws_mib={5:N1}" -f $mode, $measured.details.dispatchP50Ms, $measured.details.dispatchP95Ms, $measured.details.frameP95Ms, $meanWs, $avgWeb)
+          }
+      - name: Upload complete Windows A-B evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-editor-ab-ram
+          if-no-files-found: warn
+          path: |
+            editor-ab-results/
+            editor-ab-run-*.log
+            editor-ab-build.log
+            editor-ab-patch.diff
