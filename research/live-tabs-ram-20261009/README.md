@@ -1,0 +1,3 @@
+WebView2 RAM benchmark (one versus three live tabs)
+
+The disposable Windows CI instrumentation builds the actual integrated Aquilum binary once and compares liveTabs=1 and liveTabs=3 in ABBA order (3/1/1/3), using three separate deterministic 5MB Markdown notes. Each run records app and WebView2 process working sets, private committed bytes, mounted editor count, and time to switch back to the first note. The existing production default remains unchanged. These are process-tree sums and overcount shared resident pages; no leak is inferred from cache retention. The runner sends telemetry only to its own loopback process; no input text leaves the machine. No production change or upstream PR is made based on an unverified memory hypothesis.

@@ -1,0 +1,96 @@
+name: Aquilum WebView2 live tabs 1 vs 3 RAM A-B
+
+on:
+  push:
+    branches: ['experiments/live-tabs-ram-20261009']
+    paths:
+      - '.github/workflows/aquilum-live-tabs-memory-ab.yml'
+      - 'research/live-tabs-ram-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-webview-windows:
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare three identical large notes and disposable instrumentation
+        shell: pwsh
+        run: |
+          python research/ram-20261009/make_fixture.py lab-vault
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item lab-vault/benchmark-5mb.md lab-vault/benchmark-2.md
+          Copy-Item lab-vault/benchmark-5mb.md lab-vault/benchmark-3.md
+          python research/ram-20261009/install_ram_patch.py . desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python research/live-tabs-ram-20261009/install_live_patch.py .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install npm packages and typecheck disposable instrumentation
+        shell: pwsh
+        run: |
+          Push-Location aquilum-app
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx tsc --noEmit
+          $status = $LASTEXITCODE
+          Pop-Location
+          if ($status -ne 0) { exit $status }
+      - name: Build one actual Windows binary for both RAM modes
+        shell: pwsh
+        run: |
+          $base = (Resolve-Path lab-vault).Path
+          $env:VITE_AQUILUM_RAM_LAB = "1"
+          $env:VITE_AQUILUM_RAM_VAULT = $base
+          $env:VITE_AQUILUM_RAM_NOTE = Join-Path $base "benchmark-5mb.md"
+          $notePaths = @("benchmark-5mb.md", "benchmark-2.md", "benchmark-3.md") | ForEach-Object { Join-Path $base $_ }
+          $env:VITE_AQUILUM_RAM_NOTES = $notePaths -join "|"
+          Push-Location aquilum-app
+          npx tauri build --no-bundle 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\live-tabs-build.log"
+          $status = $LASTEXITCODE
+          Pop-Location
+          if ($status -ne 0) { exit $status }
+      - name: Run ABBA real app scenarios and sample process tree RAM
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "aquilum-app/src-tauri/target/release" -Filter aquilum-app.exe -Recurse -File | Select-Object -First 1
+          if (!$exe) { throw "No native executable built" }
+          $modes = @("3", "1", "1", "3")
+          for ($i = 0; $i -lt $modes.Length; $i++) {
+            $limit = $modes[$i]
+            $env:AQUILUM_AB_MODE = $limit
+            $label = "tabs-$limit-run-$i"
+            $destination = Join-Path "$env:GITHUB_WORKSPACE" "live-tabs-results\$label"
+            & research/ram-20261009/measure_windows.ps1 -ExePath $exe.FullName -OutputDir $destination -MaxSeconds 190 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\$label.log"
+            if ($LASTEXITCODE -ne 0) { throw "Real app scenario failed: $label" }
+            $events = @(Get-Content (Join-Path $destination "events.jsonl") | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+            $final = $events | Where-Object { $_.stage -eq "three_tabs_stable" } | Select-Object -Last 1
+            if (!$final -or "$($final.details.liveTabLimit)" -ne "$limit" -or [int]$final.details.mountedEditors -ne [int]$limit) {
+              throw "Incorrect mounted editor count in $label"
+            }
+            $samples = @(Import-Csv (Join-Path $destination "process-samples.csv"))
+            foreach ($stage in @("one_tab_stable", "two_tabs_stable", "three_tabs_stable", "switched_first_stable")) {
+              $rows = @($samples | Where-Object { $_.Stage -eq $stage })
+              if ($rows.Count -eq 0) { throw "Missing RAM samples $label stage $stage" }
+              $ws = ($rows | Measure-Object -Property TotalWorkingSetMiB -Average).Average
+              $web = ($rows | Measure-Object -Property WebViewWorkingSetMiB -Average).Average
+              $private = ($rows | Measure-Object -Property TotalPrivateCommitMiB -Average).Average
+              Write-Host ("AQUILUM_LIVE_TABS_RAM mode={0} case={1} stage={2} n={3} ws_mib={4:N2} webview_ws_mib={5:N2} private_commit_mib={6:N2}" -f $limit,$label,$stage,$rows.Count,$ws,$web,$private)
+            }
+          }
+      - name: Upload process RAM traces and renderer stage records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-live-tabs-windows-ab
+          if-no-files-found: warn
+          path: |
+            live-tabs-results/
+            live-tabs-build.log
+            tabs-*-run-*.log
