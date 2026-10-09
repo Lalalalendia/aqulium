@@ -1,0 +1,72 @@
+name: Aquilum sparse search map - native correctness and RAM A-B
+
+on:
+  push:
+    branches: ['experiments/search-sparse-ram-20261009']
+    paths:
+      - '.github/workflows/aquilum-search-sparse-ram.yml'
+      - 'research/search-sparse-ram-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sparse-native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clone original Aquilum at exact commit
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Install candidate sparse Unicode offset mapping
+        shell: pwsh
+        run: |
+          python research/search-sparse-ram-20261009/apply_sparse.py aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum diff -- aquilum-app/core/src/search/matching.rs | Out-File -Encoding utf8 "$env:GITHUB_WORKSPACE\sparse-matching.diff"
+      - name: Run full original aquilum-core Rust suite plus sparse parity tests
+        shell: pwsh
+        run: |
+          # Avoid Windows 8.3 short path aliases from runneradmin's default Temp.
+          $env:TEMP = Join-Path $env:RUNNER_TEMP "aquilum-stable-temp"
+          $env:TMP = $env:TEMP
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          Push-Location aquilum/aquilum-app/core
+          cargo test -p aquilum-core --release -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\sparse-core-suite.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Compare actual Working Set and build time in separate native processes
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          foreach ($size in @(1000000, 5000000)) {
+            foreach ($strategy in @("baseline", "sparse")) {
+              $env:AQUILUM_SPARSE_SIZE = "$size"
+              $env:AQUILUM_SPARSE_VARIANT = $strategy
+              Write-Host "AQUILUM_SPARSE_CASE size=$size strategy=$strategy"
+              cargo test -p aquilum-core sparse_memory_and_time_profile --release -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\sparse-ab.log" -Append
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+          Pop-Location
+      - name: Upload code diff and complete test receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-sparse-mapping-results
+          if-no-files-found: warn
+          path: |
+            sparse-matching.diff
+            sparse-core-suite.log
+            sparse-ab.log
