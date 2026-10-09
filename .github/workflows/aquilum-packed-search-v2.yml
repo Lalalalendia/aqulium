@@ -28,15 +28,8 @@ jobs:
           $sha = (git -C aquilum rev-parse HEAD).Trim()
           if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
           "AQUILUM_PINNED_SHA $sha"
-      - name: Baseline control for unrelated Windows trash path identity
-        shell: pwsh
-        run: |
-          Push-Location aquilum/aquilum-app/core
-          cargo test -p aquilum-core files::trash::tests::the_move_reports_where_every_file_landed --release -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\baseline-trash-control.log"
-          $control = $LASTEXITCODE
-          Pop-Location
-          "AQUILUM_BASELINE_TRASH_CONTROL_EXIT $control"
-          # Baseline control is informational; the candidate suite is authoritative.
+      # Pinned unmodified upstream reproduces the 8.3 path failure.
+      # Baseline control receipt: Actions 37932931933.
       - name: Install production-shaped packed offset map
         shell: pwsh
         run: |
