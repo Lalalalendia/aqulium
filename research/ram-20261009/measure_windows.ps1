@@ -111,10 +111,10 @@ if ($stages -contains "error") {
     $failure = ($events | Where-Object { $_.stage -eq "error" } | Select-Object -Last 1).details.message
     throw "Renderer failed: $failure"
 }
-if (!$finished -or $stages -notcontains "editor_mounted_5mb" -or $stages -notcontains "finished") {
+if (!$finished -or $stages -notcontains "one_tab_stable" -or $stages -notcontains "three_tabs_stable" -or $stages -notcontains "switched_first_stable" -or $stages -notcontains "finished") {
     throw "Incomplete real WebView scenario: stages=$($stages -join ',')"
 }
-$viewSamples = @($rows | Where-Object { $_.Stage -eq "editor_mounted_5mb" })
+$viewSamples = @($rows | Where-Object { $_.Stage -in @("one_tab_stable","two_tabs_stable","three_tabs_stable","switched_first_stable") })
 if ($viewSamples.Count -eq 0 -or @($viewSamples | Where-Object { $_.WebViewCount -gt 0 }).Count -eq 0) {
     throw "No WebView2 child processes in the real editor phase"
 }
