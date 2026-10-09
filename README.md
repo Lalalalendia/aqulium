@@ -1,21 +1,21 @@
-# Aquilum — независимая лаборатория оптимизаций
+# Aquilum: independent optimized version
 
-Эксперименты с производительностью и корректностью исходного [Freaction/Aquilum](https://github.com/Freaction/Aquilum). Этот репозиторий не является официальной веткой автора.
+Working downstream copy of [Freaction/Aquilum](https://github.com/Freaction/Aquilum), pinned to upstream commit a2ac434ba70c189a5e96e8712ec781ca608ad15c (v0.2.6). Not an official Aquilum release.
 
-## Принципы
+The full editor source, including UI, Rust core, Tauri, tests and assets, is in [aquilum-app/](aquilum-app/).
 
-- Исходный Aquilum клонируется в GitHub Actions на **зафиксированном SHA**. Никаких неучтенных изменений в upstream.
-- Каждая оптимизация проверяется **A/B бенчмарком** (один runner, одинаковая нагрузка, release build) и тестами корректности.
-- Эксперименты и workflow находятся в ветках `experiments/*`; `main` остается чистой точкой входа.
-- Метрики являются замерами конкретного узкого пути: не приравнивать ускорение открывания сессии к ускорению всего приложения.
-- До отправки PR автору нужны регрессионные тесты, проверка сохранности данных и воспроизводимый отчет.
+## Integrated improvements
 
-## Текущий проект
+- CodeMirror book and reader quote presence tracking avoids unnecessary full-document scans when editing ordinary text, without disabling quote functionality.
+- Rust sparse Unicode offset mapping reduces transient memory during search.
 
-Первый эксперимент: пропустить повторную сериализацию и запись чистой CRDT-сессии в `DocumentHub`.
+## Development
 
-Фиксированный upstream: `a2ac434ba70c189a5e96e8712ec781ca608ad15c` (Aquilum v0.2.6).
-Файлы в ветке `experiments/documenthub-clean-compact`.
+In aquilum-app/: npm ci, npm test, npm run build.
+Rust core: cargo test --manifest-path aquilum-app/core/Cargo.toml -p aquilum-core.
 
-Исходный контрольный прогон на Windows: [rar2/actions/runs/37925035007](https://github.com/Lalalalendia/rar2/actions/runs/37925035007).
-Его следует рассматривать как исторический отчет: последующие проверки проводятся в этом репозитории.
+## Provenance and license
+
+Original copyright remains with the Aquilum contributors. Original AGPL-3.0-only license applies; see [LICENSE](LICENSE). Foliate JS is materialized as regular source files from its upstream submodule checkout; exact upstream and submodule SHAs are recorded in [integration/UPSTREAM.lock](integration/UPSTREAM.lock).
+
+Benchmark results and experimental scripts remain in research/ and integration/, with additional experiment branches. The rar2 repository is not involved.
