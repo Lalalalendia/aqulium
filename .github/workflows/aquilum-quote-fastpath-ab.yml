@@ -1,0 +1,106 @@
+name: Aquilum quote scan fastpath - actual Windows CodeMirror A-B
+
+on:
+  push:
+    branches: ['experiments/editor-quote-fastpath-20261009']
+    paths:
+      - '.github/workflows/aquilum-quote-fastpath-ab.yml'
+      - 'research/editor-quote-fastpath-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-editor-ab:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: 'never'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Pin Aquilum v0.2.6 source with Foliate submodule
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "Unexpected upstream SHA" }
+          git -C aquilum submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Prepare fixture and apply feature-preserving quote presence fastpath
+        shell: pwsh
+        run: |
+          python research/ram-20261009/make_fixture.py lab-vault
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python research/ram-20261009/install_ram_patch.py aquilum desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python research/editor-quote-fastpath-20261009/install_fastpath.py aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum diff -- aquilum-app/src/main.tsx aquilum-app/src/components/Editor/extensions/index.ts aquilum-app/src/components/Editor/extensions/bookCallout/constructs.ts aquilum-app/src/components/Editor/extensions/readerQuote/constructs.ts | Out-File -Encoding utf8 quote-fastpath.diff
+      - name: Install npm packages, TypeScript check and regressions
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx tsc --noEmit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run src/components/Editor/extensions/quoteScanPresence.test.ts src/components/Editor/extensions/bookCallout/constructs.test.ts src/components/Editor/extensions/readerQuote/constructs.test.ts 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\quote-fastpath-tests.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Build original functionality with optional performance fastpath
+        shell: pwsh
+        run: |
+          $env:VITE_AQUILUM_RAM_LAB = "1"
+          $env:VITE_AQUILUM_RAM_VAULT = (Resolve-Path "lab-vault").Path
+          $env:VITE_AQUILUM_RAM_NOTE = Join-Path $env:VITE_AQUILUM_RAM_VAULT "benchmark-5mb.md"
+          Push-Location aquilum/aquilum-app
+          npx tauri build --no-bundle 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\quote-fastpath-build.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Repeated real WebView2 A-B baseline vs quote fastpath
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path aquilum/aquilum-app/src-tauri/target/release -Filter aquilum-app.exe -Recurse -File | Select-Object -First 1
+          if (!$exe) { throw "Aquilum executable not found" }
+          $modes = @("baseline", "fastpath", "baseline", "fastpath")
+          for ($idx = 0; $idx -lt $modes.Length; $idx++) {
+            $mode = $modes[$idx]
+            $env:AQUILUM_AB_MODE = $mode
+            $case = "$mode-$idx"
+            Write-Host "AQUILUM_QUOTE_AB_START case=$case"
+            $output = Join-Path "$env:GITHUB_WORKSPACE" "quote-ab-results\$case"
+            & research/ram-20261009/measure_windows.ps1 -ExePath $exe.FullName -OutputDir $output -MaxSeconds 200 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\quote-ab-run-$case.log"
+            if ($LASTEXITCODE -ne 0) { throw "Failed full app scenario $case" }
+            $events = @(Get-Content (Join-Path $output "events.jsonl") | ForEach-Object { $_ | ConvertFrom-Json })
+            $metric = $events | Where-Object { $_.stage -eq "after_120_editor_transactions" } | Select-Object -Last 1
+            if (!$metric -or $metric.details.mode -ne $mode) { throw "Mode validation failed for $case" }
+            $rows = @(Import-Csv (Join-Path $output "process-samples.csv"))
+            $samples = @($rows | Where-Object { $_.Stage -eq "editor_mounted_5mb" })
+            $ws = ($samples | Measure-Object -Property TotalWorkingSetMiB -Average).Average
+            $web = ($samples | Measure-Object -Property WebViewWorkingSetMiB -Average).Average
+            Write-Host ("AQUILUM_QUOTE_AB_RESULT case={0} mode={1} dispatch_p50_ms={2} dispatch_p95_ms={3} dispatch_p99_ms={4} frame_p95_ms={5} ram_workingset_mib={6:N1} ram_webview_mib={7:N1}" -f $case, $mode, $metric.details.dispatchP50Ms, $metric.details.dispatchP95Ms, $metric.details.dispatchP99Ms, $metric.details.frameP95Ms, $ws, $web)
+          }
+      - name: Upload A-B measurements and functional tests
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-quote-fastpath-windows-ab
+          if-no-files-found: warn
+          path: |
+            quote-fastpath.diff
+            quote-fastpath-tests.log
+            quote-fastpath-build.log
+            quote-ab-results/
+            quote-ab-run-*.log
