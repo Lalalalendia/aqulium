@@ -54,6 +54,14 @@ elif mode == "desktop":
 """
     contents = contents.replace(anchor, effects + anchor)
     app.write_text(contents, encoding="utf-8")
+    config = root / "aquilum-app/src-tauri/tauri.conf.json"
+    config_text = config.read_text(encoding="utf-8")
+    old_csp = "connect-src 'self' ipc:"
+    assert config_text.count(old_csp) == 1, "Unexpected Tauri CSP"
+    config.write_text(
+        config_text.replace(old_csp, "connect-src 'self' http://127.0.0.1:18713 ipc:"),
+        encoding="utf-8",
+    )
     main = root / "aquilum-app/src/main.tsx"
     contents = main.read_text(encoding="utf-8")
     assert "beginBootTrace();" in contents and "runRamLab" not in contents
