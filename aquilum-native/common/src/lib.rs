@@ -3,6 +3,8 @@
 //! No Tauri or web frontend is involved. No copy of the backend.
 //! WARNING: prototype with explicit Save only, not suitable for valuable notes.
 
+pub mod text_positions;
+
 use aquilum_core::app_core::{Core, CoreEvent, EventSink};
 use aquilum_core::history::Source;
 use std::fmt;
