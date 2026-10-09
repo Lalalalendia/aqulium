@@ -97,7 +97,7 @@ impl Render for NativeGpui {
                     .child("Save"))
             )
             .child(div().child(format!("Page {}/{} | {}", self.page + 1, last_page + 1, self.status)))
-            .child(div().flex_1().overflow_y_scroll().p_3().bg(rgb(0x222a36))
+            .child(div().id("preview-scroll").flex_1().overflow_y_scroll().p_3().bg(rgb(0x222a36))
                 .child(excerpt))
     }
 }
