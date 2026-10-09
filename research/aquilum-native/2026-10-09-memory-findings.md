@@ -64,6 +64,20 @@ The next vertical prototype uses this exact buffer and loads only 80 visible
 lines into Iced's editable Content; it must pass Windows GUI and persistence
 tests before declaring success.
 
+## 5. Existing production WebView2 baseline (1 vs 3 live tabs)
+
+[Corrected full Windows ABBA run #37976097072](https://github.com/Lalalalendia/aqulium/actions/runs/37976097072) completed successfully with actual Tauri, three 5-MB Markdown notes, verified 1/3 mounted editor counts and complete app+WebView2 process tree samples.
+
+| Indicator after opening three notes | liveTabs=1 | liveTabs=3 |
+|---|---:|---:|
+| Mean sum of private committed process memory, MiB | 209.52 | 225.51 |
+| Mean sum of Working Set process memory, MiB | 435.86 | 454.29 |
+| Back-switch readiness to first note | 219.5 / 310.1 ms | 4.8 / 5.4 ms |
+
+Keeping three editors alive costs about **16 MiB more private commit** than limiting to one, but switching back to a previously mounted editor is approximately 50x faster for this workload (not verified key-to-pixel). **Do not change the current default liveTabs=3 based on these data.**
+
+The original production application remains functionally more capable than either native prototype. The GPUI InputState native prototype consumed about 420 MiB private commit with three large tabs: **it does not yet demonstrate a whole-application RAM advantage over existing Tauri/WebView2**. The fixtures and features are not identical, so this is a directional warning, not a controlled cross-app winner claim.
+
 ## 5. Architectural decision
 
 Do not migrate the entire TypeScript UI immediately. Adopt the Strangler
