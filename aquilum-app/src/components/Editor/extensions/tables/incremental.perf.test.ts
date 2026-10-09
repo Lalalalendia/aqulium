@@ -23,11 +23,11 @@ function fixture(): string {
 }
 
 function median(data: number[]) {
-    const sorted = data.toSorted((a, b) => a - b);
+    const sorted = [...data].sort((a, b) => a - b);
     return sorted[Math.floor(sorted.length / 2)]!;
 }
 function percentile(data: number[], portion: number) {
-    const sorted = data.toSorted((a, b) => a - b);
+    const sorted = [...data].sort((a, b) => a - b);
     return sorted[Math.ceil(sorted.length * portion) - 1]!;
 }
 
