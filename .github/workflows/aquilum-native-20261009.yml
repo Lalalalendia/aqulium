@@ -1,0 +1,77 @@
+name: Aquilum isolated native Rust benchmark
+
+on:
+  push:
+    branches: ['experiments/documenthub-clean-compact']
+    paths:
+      - '.github/workflows/aquilum-native-20261009.yml'
+      - 'research/aquilum-native-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aquilum-native-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: 'never'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clone pinned Aquilum source
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { throw 'Clone failed' }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned checkout failed' }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne 'a2ac434ba70c189a5e96e8712ec781ca608ad15c') { throw "Unexpected SHA $sha" }
+          "Pinned Aquilum SHA: $sha" | Tee-Object -FilePath pinned-sha.txt
+      - name: Install temporary experimental patch
+        shell: pwsh
+        run: |
+          python research/aquilum-native-20261009/install_patch.py aquilum
+          if ($LASTEXITCODE -ne 0) { throw 'Patch failed' }
+          git -C aquilum diff -- aquilum-app/core/src/documents/hub.rs aquilum-app/core/src/documents/mod.rs | Out-File -Encoding utf8 native-lab-diff.patch
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aquilum/aquilum-app/src-tauri/target
+          key: aquilum-native-${{ runner.os }}-v1
+      - name: Native round-trip correctness check
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          cargo test -p aquilum-core native_roundtrip_correctness --release -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath ../../../aquilum-native-correctness.log
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: A/B native open and close timing
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          cargo test -p aquilum-core benchmark_clean_document_hub --release -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath ../../../aquilum-native-benchmark.log
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Upload native receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-native-rust-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            pinned-sha.txt
+            native-lab-diff.patch
+            aquilum-native-correctness.log
+            aquilum-native-benchmark.log
