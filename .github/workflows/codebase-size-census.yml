@@ -1,0 +1,32 @@
+name: Aquilum actual codebase LOC census
+
+on:
+  push:
+    branches: ['measure/codebase-size-20261009']
+    paths:
+      - '.github/workflows/codebase-size-census.yml'
+      - 'research/codebase-size-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  count-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Count TypeScript/TSX production code versus tests and Rust
+        run: |
+          set -euo pipefail
+          python3 research/codebase-size-20261009/count.py | tee aquilum-source-counts.log
+      - name: Upload full machine-readable counts and summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-source-loc-counts
+          if-no-files-found: warn
+          path: |
+            aquilum-source-counts.log
+            research/codebase-size-20261009/counts.json
