@@ -1,0 +1,102 @@
+name: Aquilum Native - Iced headless Content RAM
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-iced-content-ram']
+    paths:
+      - '.github/workflows/aquilum-native-iced-content-ram.yml'
+      - 'aquilum-native/iced-prototype/src/bin/iced-content-cost.rs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  headless-editor-model:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build actual Iced Content model without native window
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-iced --bin iced-content-cost --release 2>&1 | Tee-Object -FilePath iced-content-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path aquilum-native/target/release/iced-content-cost.exe)) { throw "No model-only probe" }
+      - name: Generate fixed-size Markdown fixtures
+        shell: pwsh
+        run: |
+          python research/aquilum-native/fixture.py model-fixtures
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Measure content model memory before GPU renderer exists
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path aquilum-native/target/release/iced-content-cost.exe).Path
+          New-Item -ItemType Directory model-ram -Force | Out-Null
+          $summary = [System.Collections.Generic.List[object]]::new()
+          foreach ($mb in @(1,5,20)) {
+            $note = (Resolve-Path ("model-fixtures/note-{0:D2}mb.md" -f $mb)).Path
+            $out = Join-Path (Resolve-Path model-ram).Path "probe-$mb-stdout.txt"
+            $err = Join-Path (Resolve-Path model-ram).Path "probe-$mb-stderr.txt"
+            $p = Start-Process -FilePath $exe -ArgumentList @('"' + $note + '"') -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+            $measurements=[System.Collections.Generic.List[object]]::new()
+            $ready=$false
+            $limit=$false
+            try {
+              $timer=[Diagnostics.Stopwatch]::StartNew()
+              for ($step=0; $step -lt 200; $step++) {
+                Start-Sleep -Milliseconds 300
+                $p.Refresh()
+                $mem=[math]::Round($p.PrivateMemorySize64/1MB,2)
+                $measurements.Add([PSCustomObject]@{
+                  elapsedMs=[math]::Round($timer.Elapsed.TotalMilliseconds,2)
+                  privateMiB=$mem
+                  workingSetMiB=[math]::Round($p.WorkingSet64/1MB,2)
+                })
+                if ($mem -ge 2304) { $limit=$true; break }
+                if (Test-Path $out) {
+                  if (Select-String -Path $out -Pattern 'AQUILUM_ICED_MODEL_READY' -Quiet) { $ready=$true; break }
+                }
+                if ($p.HasExited) { break }
+              }
+              if ($ready) {
+                Start-Sleep -Seconds 2
+                $p.Refresh()
+                $measurements.Add([PSCustomObject]@{
+                  elapsedMs=[math]::Round($timer.Elapsed.TotalMilliseconds,2)
+                  privateMiB=[math]::Round($p.PrivateMemorySize64/1MB,2)
+                  workingSetMiB=[math]::Round($p.WorkingSet64/1MB,2)
+                })
+              }
+            } finally {
+              try {
+                $p.Refresh()
+                if (!$p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+              } catch {}
+              $p.Dispose()
+            }
+            $item=[PSCustomObject]@{
+              workloadMiB=$mb; modelConstructed=$ready; ramLimitExceeded=$limit
+              maxPrivateMiB=($measurements | Measure-Object -Property privateMiB -Maximum).Maximum
+              maxWorkingSetMiB=($measurements | Measure-Object -Property workingSetMiB -Maximum).Maximum
+              samples=$measurements.ToArray()
+            }
+            $summary.Add($item)
+            Write-Host "AQUILUM_ICED_HEADLESS_RAM $($item | ConvertTo-Json -Depth 6 -Compress)"
+            if (!$ready -and !$limit) {
+              Write-Host "STDOUT: $(Get-Content $out -Raw)"
+              Write-Host "STDERR: $(Get-Content $err -Raw)"
+              throw "Headless Iced editor model failed for $mb MiB"
+            }
+          }
+          @($summary) | ConvertTo-Json -Depth 9 | Out-File -FilePath model-ram/results.json -Encoding utf8
+      - name: Save model memory receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-iced-model-ram
+          if-no-files-found: warn
+          path: |
+            model-ram/
+            iced-content-build.log
