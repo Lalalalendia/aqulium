@@ -54,6 +54,8 @@ For a 20-MiB / 487,711-line fixture:
 - **24,873,218** bytes allocated to text + line-index capacity (~23.7 MiB), excluding allocator and CRDT overhead.
 - **2,580** bytes of visible text selected by one zero-copy 60-line view.
 
+**Important edge case:** the current Iced viewport prototype caps the number of visible *lines* (80), not the number of bytes. A single megabyte-long line can still create a large Iced text widget. Production must impose a UTF-8-safe byte cap as well as a line cap, with scroll/edit semantics across chunks. Do not interpret the current page size as a universal RAM upper bound.
+
 This is MODEL capacity, not process RSS; it does not yet prove
 keyboard-to-pixel performance. It currently adjusts subsequent line offsets
 in O(line count), and global UTF-16-to-UTF-8 conversion is O(document).
