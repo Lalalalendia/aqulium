@@ -111,7 +111,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p aquilum-core --release -- --test-threads=1 2>&1 | tee ../../integration/rust-core-tests.log
+          # Original v0.2.6 has five Windows path-identity assumptions that fail
+          # on Linux (one vault C:/ path test, four wikixiv backslash-title tests).
+          # They are unchanged by our patches. Run all of them on native
+          # Windows in validate-integrated-windows-core.yml instead.
+          cargo test -p aquilum-core --release -- --test-threads=1 \
+            --skip mcp::vault::tests::rejects_paths_that_escape_the_vault \
+            --skip wikixiv::extract::tests::filename_allows_wiki_lookup_for_a_short_note \
+            --skip wikixiv::extract::tests::filename_plus_body_terms \
+            --skip wikixiv::extract::tests::numeric_filename_is_title \
+            --skip wikixiv::extract::tests::title_from_path_strips_extension \
+            2>&1 | tee ../../integration/rust-core-tests.log
       - name: Preserve validation logs
         if: always()
         uses: actions/upload-artifact@v4
