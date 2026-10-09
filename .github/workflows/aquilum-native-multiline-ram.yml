@@ -1,0 +1,99 @@
+name: Aquilum Native - Iced vs GPUI multiline Windows RAM
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-gpui-text-input']
+    paths:
+      - '.github/workflows/aquilum-native-multiline-ram.yml'
+      - 'research/aquilum-native/probe-multiline.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare-editable-uis:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for pinned GPUI editor release build to succeed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference="Stop"
+          $headers=@{Authorization="Bearer $env:GH_TOKEN";Accept="application/vnd.github+json"}
+          $url="https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/37975167896"
+          $complete=$false
+          for($i=0;$i -lt 100;$i++){
+            $run=Invoke-RestMethod -Uri $url -Headers $headers
+            if($run.status -eq "completed"){
+              if($run.conclusion -ne "success"){throw "GPUI input build 37975167896 failed: $($run.conclusion)"}
+              $complete=$true
+              break
+            }
+            Start-Sleep -Seconds 8
+          }
+          if(!$complete){throw "GPUI input did not finish before dependency timeout"}
+          Write-Host "AQUILUM_GPUI_SOURCE_BUILD $($run.html_url)"
+      - uses: actions/download-artifact@v4
+        with:
+          name: aquilum-native-iced-windows
+          run-id: 37972110760
+          github-token: ${{ github.token }}
+          path: artifacts/iced
+      - uses: actions/download-artifact@v4
+        with:
+          name: aquilum-gpui-input-native-windows
+          run-id: 37975167896
+          github-token: ${{ github.token }}
+          path: artifacts/gpui
+      - name: Verify executables and save hashes
+        shell: pwsh
+        run: |
+          $iced=Get-ChildItem artifacts/iced -Recurse -File -Filter aquilum-native-iced.exe | Select-Object -First 1
+          $gpui=Get-ChildItem artifacts/gpui -Recurse -File -Filter aquilum-native-gpui-input.exe | Select-Object -First 1
+          if(!$iced -or !$gpui){throw "Missing editable editor binary"}
+          New-Item -ItemType Directory -Path multiline-ram -Force | Out-Null
+          @($iced,$gpui) | Get-FileHash -Algorithm SHA256 | Select-Object Path,Hash |
+            ConvertTo-Json | Set-Content multiline-ram/executables-sha256.json
+          Write-Host "AQUILUM_NATIVE_EDITOR_BINS iced=$($iced.Length) gpui=$($gpui.Length)"
+      - name: Generate Markdown fixtures and input hashes
+        shell: pwsh
+        run: |
+          python research/aquilum-native/fixture.py multiline-fixtures
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          Get-ChildItem multiline-fixtures/*.md | Get-FileHash -Algorithm SHA256 |
+            Sort-Object Path | Select-Object Path,Hash | ConvertTo-Json |
+            Set-Content multiline-ram/input-hashes-before.json
+      - name: Verify real GUI window and sample process private memory
+        shell: pwsh
+        run: |
+          $iced=(Get-ChildItem artifacts/iced -Recurse -File -Filter aquilum-native-iced.exe | Select-Object -First 1).FullName
+          $gpui=(Get-ChildItem artifacts/gpui -Recurse -File -Filter aquilum-native-gpui-input.exe | Select-Object -First 1).FullName
+          & research/aquilum-native/probe-multiline.ps1 -IcedExe $iced -GpuiExe $gpui -FixtureDir multiline-fixtures -OutputDir multiline-ram 2>&1 |
+            Tee-Object -FilePath multiline-ram/probe-console.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+      - name: Reject accidental fixture writes
+        if: always()
+        shell: pwsh
+        run: |
+          if(!(Test-Path multiline-ram/input-hashes-before.json)){exit 0}
+          $before=Get-Content multiline-ram/input-hashes-before.json -Raw | ConvertFrom-Json
+          $after=Get-ChildItem multiline-fixtures/*.md | Get-FileHash -Algorithm SHA256
+          foreach($entry in $before){
+            $now=$after | Where-Object { $_.Path -eq $entry.Path }
+            if(!$now -or $now.Hash -ne $entry.Hash){throw "Note changed without Save: $($entry.Path)"}
+          }
+          "AQUILUM_NATIVE_RAM_FIXTURES_UNMODIFIED"
+      - name: Upload stderr and raw RAM traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-editable-ui-ram
+          if-no-files-found: warn
+          path: |
+            multiline-ram/
+            multiline-fixtures/manifest.json
