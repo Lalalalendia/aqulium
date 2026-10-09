@@ -5,7 +5,6 @@ type Details = Record<string, string | number | boolean | null>;
 const NOTE_PATH: string = import.meta.env.VITE_AQUILUM_RAM_NOTE;
 const URL = 'http://127.0.0.1:18713/event';
 const AB_KEY = 'aquilum_editor_ab_mode';
-const AB_MODES = ['baseline', 'no_fullscans', 'no_renumber', 'both'] as const;
 const AB_MODE = window.localStorage.getItem(AB_KEY) ?? 'baseline';
 
 
@@ -109,8 +108,6 @@ async function scenario(): Promise<void> {
   await pause(1700);
   await event('after_ten_reopens');
   await pause(1300);
-  const currentIndex = AB_MODES.findIndex((mode) => mode === AB_MODE);
-  window.localStorage.setItem(AB_KEY, AB_MODES[(currentIndex + 1) % AB_MODES.length]!);
   await event('finished');
 }
 

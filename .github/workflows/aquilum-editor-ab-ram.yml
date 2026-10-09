@@ -46,7 +46,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python research/editor-ab-20261009/install_ablation_patch.py aquilum
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C aquilum diff -- aquilum-app/src/components/Editor/extensions/outline/index.ts aquilum-app/src/components/Editor/extensions/bookCallout/constructs.ts aquilum-app/src/components/Editor/extensions/readerQuote/constructs.ts | Out-File -Encoding utf8 editor-ab-patch.diff
+          git -C aquilum diff -- aquilum-app/src/main.tsx aquilum-app/src/components/Editor/extensions/index.ts aquilum-app/src/components/Editor/extensions/bookCallout/constructs.ts aquilum-app/src/components/Editor/extensions/readerQuote/constructs.ts | Out-File -Encoding utf8 editor-ab-patch.diff
       - name: Install dependencies and verify modified TypeScript
         shell: pwsh
         run: |
@@ -75,6 +75,7 @@ jobs:
           if (!$exe) { throw "Cannot find Aquilum desktop executable" }
           $modes = @("baseline", "no_fullscans", "no_renumber", "both")
           foreach ($mode in $modes) {
+            $env:AQUILUM_AB_MODE = $mode
             Write-Host "AQUILUM_AB_START expected_mode=$mode"
             $dir = Join-Path "$env:GITHUB_WORKSPACE" "editor-ab-results\$mode"
             & research/ram-20261009/measure_windows.ps1 -ExePath $exe.FullName -OutputDir $dir -MaxSeconds 200 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\editor-ab-run-$mode.log"

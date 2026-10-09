@@ -10,7 +10,7 @@ Four runs with one compiled binary on one Windows runner:
 
 The temporary changes are only appropriate for a fixture without book/reader quote callouts and ordered lists. A production optimization must preserve those constructs and incremental updates.
 
-Renderer persists the next mode in WebView2 localStorage after each successful run. Each mode starts as a new native process with separate telemetry output. If the mode does not persist, the workflow aborts. Process-tree teardown is enforced between runs.
+Runner sets each mode explicitly through a local HTTP endpoint, injected into WebView2 localStorage before React renders the editor. Each mode starts as a new native process with separate telemetry. Misconfigured modes abort the workflow. Process-tree teardown is enforced between runs.
 
 Each case creates a deterministic 5 MB Markdown fixture, inserts 120 characters via CodeMirror dispatch at EOF, measures p50/p95/p99 and next animation frame turnaround, performs 140 scroll frames and 10 close/reopen cycles, and measures process tree memory.
 

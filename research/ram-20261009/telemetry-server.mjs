@@ -17,6 +17,11 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok'); return;
   }
+  if (req.method === 'GET' && req.url === '/mode') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end(process.env.AQUILUM_AB_MODE || 'baseline');
+    return;
+  }
   if (req.method !== 'POST' || req.url !== '/event') {
     res.writeHead(404); res.end(); return;
   }
