@@ -14,7 +14,7 @@ fn text(model: &TextModel) -> String {
 fn incremental_unicode_edit_persists_through_real_document_hub() {
     let tmp=tempfile::tempdir().unwrap();
     let path=tmp.path().join("Книга-🌍.md");
-    let initial="Привет 🌍\n# Заголовок\r\n";
+    let initial="Привет 🌍\n# Заголовок\n";
     fs::write(&path,initial).unwrap();
     let host=NativeHost::new(&tmp.path().join("profile")).unwrap();
     let mut document=host.open(&path).unwrap();
@@ -70,7 +70,7 @@ fn stale_document_version_rejects_delta_without_mutating_secondary_rope() {
 fn edit_at_document_end_from_small_window_covers_earlier_utf16_units() {
     let tmp=tempfile::tempdir().unwrap();
     let path=tmp.path().join("long.md");
-    let original="Ж🌍 строка\r\n".repeat(5000)+"A🌍B\n";
+    let original="Ж🌍 строка\n".repeat(5000)+"A🌍B\n";
     fs::write(&path,&original).unwrap();
     let host=NativeHost::new(&tmp.path().join("profile")).unwrap();
     let mut document=host.open(&path).unwrap();
@@ -85,5 +85,26 @@ fn edit_at_document_end_from_small_window_covers_earlier_utf16_units() {
     model.commit_proposed_edit(edit).unwrap();
     drop(document);
     host.shutdown();
-    assert_eq!(fs::read_to_string(path).unwrap(),"Ж🌍 строка\r\n".repeat(5000)+"Aok\nB\n");
+    assert_eq!(fs::read_to_string(path).unwrap(),"Ж🌍 строка\n".repeat(5000)+"Aok\nB\n");
+}
+
+#[test]
+fn original_crlf_files_are_explicitly_normalized_by_existing_aquilum_core() {
+    // This behavior is intentional in aquilum-app/core/src/files/document.rs:
+    // read_file_snapshot_impl normalizes CRLF and lone CR to LF.
+    // A native editor must mirror DocumentHub's opened text, not raw disk bytes.
+    let tmp=tempfile::tempdir().unwrap();
+    let path=tmp.path().join("windows-style.md");
+    fs::write(&path,"Line 1\r\nПривет 🌍\r\n").unwrap();
+    let host=NativeHost::new(&tmp.path().join("profile")).unwrap();
+    let mut doc=host.open(&path).unwrap();
+    assert_eq!(doc.initial_text(),"Line 1\nПривет 🌍\n");
+    let mut model=TextModel::from_str(doc.initial_text());
+    let view=model.window_at_line(1,1,120).unwrap();
+    let plan=model.propose_viewport_change(&view,0..0,"X").unwrap();
+    doc.push_json_change(plan.to_changeset_json()).unwrap();
+    model.commit_proposed_edit(plan).unwrap();
+    drop(doc);
+    host.shutdown();
+    assert_eq!(fs::read_to_string(&path).unwrap(),"Line 1\nXПривет 🌍\n");
 }
