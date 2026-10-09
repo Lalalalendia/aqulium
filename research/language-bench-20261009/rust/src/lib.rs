@@ -1,44 +1,29 @@
 use wasm_bindgen::prelude::*;
 
-/// Same lexical prefilter as scan.ts and QuoteScan.res.
-///
-/// Checks ASCII spaces/tabs before '>', spaces/tabs after it, and ASCII
-/// case-insensitive [!book] or [!quote] prefix. Does not parse rich quotes.
-/// UTF-8 bytes are safe here: only ASCII syntax is inspected. JS->Wasm
-/// UTF-8 encoding + memory copy IS INCLUDED in JS-call benchmarks.
+mod kernel;
+
+/// Encodes and transfers a JavaScript string on every call.
 #[wasm_bindgen]
 pub fn scan_markers(input: &str) -> u32 {
-    let bytes = input.as_bytes();
-    let mut line_from = 0usize;
-    let mut books = 0u32;
-    let mut quotes = 0u32;
-    while line_from < bytes.len() {
-        let mut at = line_from;
-        while at < bytes.len() && (bytes[at] == b' ' || bytes[at] == b'\t') {
-            at += 1;
-        }
-        if at < bytes.len() && bytes[at] == b'>' {
-            at += 1;
-            while at < bytes.len() && (bytes[at] == b' ' || bytes[at] == b'\t') {
-                at += 1;
-            }
-            if bytes
-                .get(at..at.saturating_add(7))
-                .is_some_and(|s| s.eq_ignore_ascii_case(b"[!book]"))
-            {
-                books += 1;
-            } else if bytes
-                .get(at..at.saturating_add(8))
-                .is_some_and(|s| s.eq_ignore_ascii_case(b"[!quote]"))
-            {
-                quotes += 1;
-            }
-        }
-        line_from = match memchr::memchr(b'\n', &bytes[line_from..]) {
-            Some(relative) => line_from + relative + 1,
-            None => bytes.len(),
-        };
+    kernel::scan_bytes(input.as_bytes())
+}
+
+/// Keep the UTF-8 representation in Wasm linear memory between calls.
+/// The constructor includes the one-time conversion and copy.
+#[wasm_bindgen]
+pub struct PreloadedScanner {
+    data: Vec<u8>,
+}
+#[wasm_bindgen]
+impl PreloadedScanner {
+    #[wasm_bindgen(constructor)]
+    pub fn new(input: &str) -> PreloadedScanner {
+        PreloadedScanner { data: input.as_bytes().to_vec() }
     }
-    assert!(books <= 65535 && quotes <= 65535, "benchmark marker overflow");
-    (books << 16) | quotes
+    pub fn scan(&self) -> u32 {
+        kernel::scan_bytes(&self.data)
+    }
+    pub fn byte_len(&self) -> usize {
+        self.data.len()
+    }
 }

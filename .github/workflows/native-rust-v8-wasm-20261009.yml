@@ -1,0 +1,117 @@
+name: Aquilum native Rust vs TypeScript V8 vs Rust-Wasm (fresh/cached)
+
+on:
+  push:
+    branches: ['experiments/native-rust-v8-wasm-20261009']
+    paths:
+      - '.github/workflows/native-rust-v8-wasm-20261009.yml'
+      - 'research/language-bench-20261009/native/**'
+      - 'research/language-bench-20261009/rust/src/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  native-rust-vs-js:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - name: Build TypeScript and ReScript controls
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm run build:rescript
+          npm run build:js
+          test -f dist/ts.mjs
+          node --version
+          rustc --version
+          wasm-pack --version
+      - name: Compile one Rust scanner kernel to native binary
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s%3N)
+          cargo build --manifest-path native/Cargo.toml --release
+          echo "AQUILUM_NATIVE_BUILD_MS=$(($(date +%s%3N) - start))"
+          test -x native/target/release/aquilum_native_scan
+      - name: Compile identical Rust scanner kernel to WebAssembly
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s%3N)
+          wasm-pack build rust --target nodejs --release --out-dir pkg --out-name aquilum_scan_bench
+          echo "AQUILUM_WASM_BUILD_MS=$(($(date +%s%3N) - start))"
+          test -f rust/pkg/aquilum_scan_bench_bg.wasm
+          test -f rust/pkg/aquilum_scan_bench.js
+      - name: Verify same output against independent oracle and edge cases
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          node validate.mjs
+          node native/create-inputs.mjs
+          node native/validate.mjs
+      - name: Benchmark native Rust and 3 JavaScript-hosted paths in isolated processes
+        working-directory: research/language-bench-20261009
+        shell: bash
+        run: |
+          set -euo pipefail
+          node native/runner.mjs 2>&1 | tee native-benchmark.log
+          test -s native/output/results.csv
+          test -s native/output/results.json
+          test -s native/output/results.md
+          {
+            echo "SOURCE_SHA=$GITHUB_SHA"
+            node --version
+            npm --version
+            rustc --version
+            cargo --version
+            wasm-pack --version
+            npm ls --depth=0
+          } > native/output/build-info.txt
+          cp native-benchmark.log native/output/raw-run.log
+      - name: Commit complete machine-readable results only to experiment branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/language-bench-20261009/native/output
+          if ! git diff --cached --quiet; then
+            git commit -m "MEASURE: native Rust vs TypeScript V8 vs Wasm with and without document transfer"
+            git push origin HEAD:refs/heads/experiments/native-rust-v8-wasm-20261009
+          fi
+      - name: Upload native binary, Wasm module, compiled JS and raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-v8-wasm-comparison
+          if-no-files-found: warn
+          path: |
+            research/language-bench-20261009/native/output/
+            research/language-bench-20261009/native-benchmark.log
+            research/language-bench-20261009/native/target/release/aquilum_native_scan
+            research/language-bench-20261009/dist/ts.mjs
+            research/language-bench-20261009/rust/pkg/aquilum_scan_bench.js
+            research/language-bench-20261009/rust/pkg/aquilum_scan_bench_bg.wasm
