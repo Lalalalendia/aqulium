@@ -1,8 +1,8 @@
-name: Aquilum sparse search map - native correctness and RAM A-B
+name: Aquilum sparse search stress - Unicode RAM and CPU
 
 on:
   push:
-    branches: ['experiments/search-sparse-ram-20261009']
+    branches: ['experiments/search-sparse-stress-20261009']
     paths:
       - '.github/workflows/aquilum-search-sparse-ram.yml'
       - 'research/search-sparse-ram-20261009/**'
@@ -50,11 +50,12 @@ jobs:
         shell: pwsh
         run: |
           Push-Location aquilum/aquilum-app/core
-          foreach ($size in @(1000000, 5000000)) {
+          foreach ($corpus in @("mixed", "cyrillic", "ascii", "accented", "hangul")) {
             foreach ($strategy in @("baseline", "sparse")) {
-              $env:AQUILUM_SPARSE_SIZE = "$size"
+              $env:AQUILUM_SPARSE_SIZE = "5000000"
               $env:AQUILUM_SPARSE_VARIANT = $strategy
-              Write-Host "AQUILUM_SPARSE_CASE size=$size strategy=$strategy"
+              $env:AQUILUM_SPARSE_CORPUS = $corpus
+              Write-Host "AQUILUM_SPARSE_CASE corpus=$corpus size=5000000 strategy=$strategy"
               cargo test -p aquilum-core sparse_memory_and_time_profile --release -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\sparse-ab.log" -Append
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }

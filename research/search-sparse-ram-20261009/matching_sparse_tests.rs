@@ -161,8 +161,15 @@ fn sparse_memory_and_time_profile() {
     assert!(variant == "baseline" || variant == "sparse");
     let size = std::env::var("AQUILUM_SPARSE_SIZE").ok()
         .and_then(|s| s.parse::<usize>().ok()).unwrap_or(5_000_000);
-    let paragraph =
-        "## Heading\nAlpha beta gamma, local Markdown search. Тестовый текст, русский язык. A short quote. Long paragraph with ordinary words and 12345.\n";
+    let corpus = std::env::var("AQUILUM_SPARSE_CORPUS").unwrap_or_else(|_| "mixed".into());
+    let paragraph = match corpus.as_str() {
+        "ascii" => "Alpha beta gamma. The quick brown fox jumps over a lazy dog.\n",
+        "cyrillic" => "Русский текст. Ёлка, йота, чтение и письмо. Ещё много предложений.\n",
+        "accented" => "éìêïÅàäçñİÖÙe\u{0301} éÈÍÉñöüİ çède, señor café!\n",
+        "hangul" => "가나다라마바사 아자차카타파하 한국어 테스트 문자열과 한글 문서\n",
+        "mixed" => "## Heading\nAlpha beta gamma, local Markdown search. Тестовый текст, русский язык. A short quote. Long paragraph with ordinary words and 12345.\n",
+        _ => panic!("Unknown RAM stress corpus: {corpus}"),
+    };
     let input = paragraph.repeat(size / paragraph.len() + 1);
     let baseline = counters();
     let clock = Instant::now();
@@ -185,11 +192,32 @@ fn sparse_memory_and_time_profile() {
     };
     std::hint::black_box(&result);
     println!(
-        "AQUILUM_SPARSE_RAM variant={} input_bytes={} normalized_bytes={} mapping_entries={} \
+        "AQUILUM_SPARSE_RAM variant={} corpus={} input_bytes={} normalized_bytes={} mapping_entries={} \
          mapping_capacity_mib={:.3} build_ms={:.3} ws_before_mib={:.3} ws_after_mib={:.3} \
          ws_delta_mib={:.3} private_before_mib={:.3} private_after_mib={:.3} private_delta_mib={:.3}",
-        variant, input.len(), normalized_bytes, positions,
+        variant, corpus, input.len(), normalized_bytes, positions,
         capacity_bytes as f64 / 1_048_576., ms, baseline.0, after.0,
         after.0-baseline.0, baseline.1, after.1, after.1-baseline.1
+    );
+
+    // Repeat construction enough times to obtain a useful warm-run distribution.
+    // Peak RAM above was measured before these additional runs.
+    let mut timings = Vec::with_capacity(11);
+    timings.push(ms);
+    drop(result);
+    for _ in 0..10 {
+        let started = Instant::now();
+        if variant == "baseline" {
+            std::hint::black_box(RefNormalized::new(&input));
+        } else {
+            std::hint::black_box(NormalizedText::new(&input));
+        }
+        timings.push(started.elapsed().as_secs_f64() * 1000.);
+    }
+    timings.sort_by(f64::total_cmp);
+    println!(
+        "AQUILUM_SPARSE_CPU variant={} corpus={} size={} n={} p50_ms={:.3} p95_ms={:.3}",
+        variant, corpus, input.len(), timings.len(),
+        timings[timings.len() / 2], timings[(timings.len()-1)*95/100]
     );
 }
