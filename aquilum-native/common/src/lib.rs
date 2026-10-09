@@ -85,6 +85,31 @@ impl NativeDocument {
         Ok(next)
     }
 
+    /// Send ONE CodeMirror-compatible ChangeSet JSON batch to the real
+    /// DocumentHub / Yrs replica. The base version is checked by the same
+    /// kernel path that the TypeScript editor already uses.
+    ///
+    /// The caller must create and validate the change before calling this
+    /// function, then commit its local UI/rope model only on success. This is
+    /// NOT a durability/Undo-Redo guarantee; desktop rollback and fsync are
+    /// later acceptance gates.
+    pub fn push_json_change(&mut self, change: serde_json::Value) -> Result<u64, NativeError> {
+        let accepted = self.core.documents.push(
+            &self.core, &self.path, self.version, "aquilum-native-rope",
+            std::slice::from_ref(&change),
+        ).map_err(|e| NativeError::Core(format!("{e:?}")))?;
+        if !accepted {
+            return Err(NativeError::Core(format!(
+                "DocumentHub rejected stale edit (expected version {})",
+                self.version,
+            )));
+        }
+        self.version = self.version.checked_add(1).ok_or_else(|| {
+            NativeError::Core("DocumentHub version counter overflow".to_owned())
+        })?;
+        Ok(self.version)
+    }
+
     pub fn refresh(&mut self) -> Result<String, NativeError> {
         let latest = self.core.documents.read(&self.core, &self.path)
             .map_err(|e| NativeError::Core(format!("{e:?}")))?;
