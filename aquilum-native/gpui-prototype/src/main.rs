@@ -55,7 +55,7 @@ impl Render for NativeGpui {
         for index in 0..self.tabs.len() {
             let title = self.tabs[index].document.path().file_name()
                 .unwrap_or_default().to_string_lossy().to_string();
-            tabs = tabs.child(div().id(format!("tab-{index}")).cursor_pointer().p_2().bg(rgb(0x354057))
+            tabs = tabs.child(div().id(index).cursor_pointer().p_2().bg(rgb(0x354057))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.selected = index;
                     this.page = 0;
