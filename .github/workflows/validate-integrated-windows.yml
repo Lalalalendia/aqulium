@@ -1,8 +1,8 @@
-name: Build integrated Aquilum Windows desktop
+name: Aquilum main Windows desktop executable
 
 on:
   push:
-    branches: ['integration/aquilum-perf']
+    branches: ['main']
     paths:
       - '.github/workflows/validate-integrated-windows.yml'
       - 'aquilum-app/**'
@@ -48,6 +48,18 @@ jobs:
           $exe = Get-ChildItem -Path "aquilum-app/src-tauri/target/release" -Filter "aquilum-app.exe" -Recurse -File | Select-Object -First 1
           if (!$exe) { throw "Expected actual Aquilum Windows executable was not produced" }
           "AQUILUM_WINDOWS_DESKTOP_BUILT path=$($exe.FullName) size=$($exe.Length)"
+          $hash = (Get-FileHash -Path $exe.FullName -Algorithm SHA256).Hash
+          "AQUILUM_WINDOWS_SHA256 $hash"
+          "$hash  $($exe.Name)" | Out-File -FilePath "$env:GITHUB_WORKSPACE\\aquilum-app.sha256" -Encoding utf8
+      - name: Upload actual optimized Windows executable
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-optimized-windows-exe
+          path: |
+            aquilum-app/src-tauri/target/release/aquilum-app.exe
+            aquilum-app.sha256
+          if-no-files-found: error
       - name: Preserve actual desktop build log
         if: always()
         uses: actions/upload-artifact@v4
