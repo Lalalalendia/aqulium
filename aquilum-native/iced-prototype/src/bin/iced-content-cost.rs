@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("AQUILUM_ICED_MODEL_READ bytes={bytes} lines={lines} ms={:.3}", started.elapsed().as_secs_f64()*1000.0);
     io::stdout().flush()?;
     let started_model = Instant::now();
-    let content = text_editor::Content::with_text(black_box(&input));
+    let content: text_editor::Content = text_editor::Content::with_text(black_box(&input));
     println!(
         "AQUILUM_ICED_MODEL_READY bytes={bytes} lines={lines} build_ms={:.3}",
         started_model.elapsed().as_secs_f64() * 1000.0
