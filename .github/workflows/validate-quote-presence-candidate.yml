@@ -1,0 +1,49 @@
+name: Aquilum quote scan upstream candidate - frontend validations
+
+on:
+  push:
+    branches: ['candidates/quote-scan-presence']
+    paths:
+      - '.github/workflows/validate-quote-presence-candidate.yml'
+      - 'candidates/quote-scan-presence/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Checkout original Aquilum v0.2.6 with dependencies
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          test "$(git -C aquilum rev-parse HEAD)" = "a2ac434ba70c189a5e96e8712ec781ca608ad15c"
+          git -C aquilum submodule update --init --recursive
+      - name: Apply upstream-ready TypeScript patch
+        run: |
+          python3 candidates/quote-scan-presence/apply.py aquilum
+          git -C aquilum diff -- aquilum-app/src/components/Editor/extensions/index.ts aquilum-app/src/components/Editor/extensions/bookCallout/constructs.ts aquilum-app/src/components/Editor/extensions/readerQuote/constructs.ts > candidate-quote-presence.patch
+      - name: Run complete frontend test suite and build
+        working-directory: aquilum/aquilum-app
+        run: |
+          set -o pipefail
+          npm ci --no-audit --no-fund
+          npm test 2>&1 | tee ../../candidate-all-vite-tests.log
+          npm run build 2>&1 | tee ../../candidate-production-build.log
+      - name: Upload candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quote-scan-upstream-candidate
+          if-no-files-found: warn
+          path: |
+            candidate-quote-presence.patch
+            candidate-all-vite-tests.log
+            candidate-production-build.log
