@@ -8,6 +8,7 @@ license = "AGPL-3.0-only"
 [dependencies]
 aquilum-native-common = { path = "../common" }
 ropey = "=1.6.1"
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
