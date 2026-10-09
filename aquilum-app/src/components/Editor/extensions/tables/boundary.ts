@@ -2,6 +2,7 @@ import { EditorSelection, EditorState, Prec, Transaction, type Text } from '@cod
 import { EditorView, keymap, ViewPlugin } from '@codemirror/view';
 import {
     findTablesInDoc,
+    findTablesAfterChanges,
     tableOwnsDocEnd,
     type TableRange,
 } from './constructs';
@@ -16,8 +17,10 @@ export function blankLineInsertPos(doc: Text, table: TableRange): number | null 
     return null;
 }
 
-export function collectBlankLineChanges(doc: Text): { from: number; insert: string }[] {
-    const tables = findTablesInDoc(doc);
+export function collectBlankLineChanges(
+    doc: Text,
+    tables: readonly TableRange[] = findTablesInDoc(doc),
+): { from: number; insert: string }[] {
     const changes: { from: number; insert: string }[] = [];
     for (let i = tables.length - 1; i >= 0; i--) {
         const from = blankLineInsertPos(doc, tables[i]);
@@ -28,7 +31,8 @@ export function collectBlankLineChanges(doc: Text): { from: number; insert: stri
 
 const tableBlankLineFilter = EditorState.transactionFilter.of((tr) => {
     if (!tr.docChanged) return tr;
-    const changes = collectBlankLineChanges(tr.newDoc);
+    const tables = findTablesAfterChanges(tr.startState.doc, tr.newDoc, tr.changes);
+    const changes = collectBlankLineChanges(tr.newDoc, tables);
     if (changes.length === 0) return tr;
     return [tr, { changes, sequential: true }];
 });

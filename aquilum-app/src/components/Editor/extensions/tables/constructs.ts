@@ -1,4 +1,4 @@
-import type { Text } from '@codemirror/state';
+import type { ChangeDesc, Text } from '@codemirror/state';
 import { parseMarkdownTable, serializeMarkdownTable } from './markdown';
 import type { TableModel } from './model';
 import { isSeparatorRow, splitTableRow } from './rows';
@@ -80,9 +80,76 @@ function findCompleteTablesInLines(doc: Text, fromLine: number, toLine: number):
     return ranges;
 }
 
+// CodeMirror Text is an immutable persistent rope. Holding parsed tables by
+// Text identity is safe and allows transaction filters, previews and caret
+// guards to share the same parse without retaining obsolete documents.
+const parsedTables = new WeakMap<Text, TableRange[]>();
+
 export function findTablesInDoc(doc: Text): TableRange[] {
-    if (doc.length === 0) return [];
-    return findCompleteTablesInLines(doc, 1, doc.lines);
+    const known = parsedTables.get(doc);
+    if (known) return known;
+    const tables = doc.length === 0 ? [] : findCompleteTablesInLines(doc, 1, doc.lines);
+    parsedTables.set(doc, tables);
+    return tables;
+}
+
+// A table needs a row containing | plus a separator row. Before reusing an
+// earlier parse, inspect both sides of each change (including line joins) and
+// the two surrounding lines. Any pipe or layout metadata forces a full parse.
+// False positives only cost CPU; false negatives could hide a new table.
+function tableSyntaxNear(doc: Text, from: number, to: number): boolean {
+    const start = doc.lineAt(Math.min(from, doc.length)).number;
+    const end = doc.lineAt(Math.min(to, doc.length)).number;
+    const first = Math.max(1, start - 2);
+    const last = Math.min(doc.lines, end + 2);
+    for (let i = first; i <= last; i++) {
+        const line = doc.line(i).text;
+        if (line.includes('|') || line.trimStart().startsWith('<!--q-table:')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Map cached table ranges through a transaction when no edit can change table
+ * syntax or ownership. Edits inside or adjacent to tables, and any newly
+ * possible table syntax, still use the original full parser.
+ *
+ * Reusing model objects is safe because the corresponding Markdown text did
+ * not change. Widget positional handles are rebuilt by the decoration field.
+ */
+export function findTablesAfterChanges(
+    oldDoc: Text,
+    newDoc: Text,
+    changes: ChangeDesc,
+): TableRange[] {
+    const oldTables = findTablesInDoc(oldDoc);
+    let needsScan = false;
+    changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+        if (needsScan) return;
+        if (
+            tableSyntaxNear(oldDoc, fromA, toA)
+            || tableSyntaxNear(newDoc, fromB, toB)
+            || oldTables.some((table) =>
+                fromA <= table.to && toA >= table.from
+            )
+        ) {
+            needsScan = true;
+        }
+    });
+    if (needsScan) return findTablesInDoc(newDoc);
+
+    // An edit outside all table ranges changes only document coordinates. For
+    // an append after the final table, there is nothing to move.
+    const mapped = oldTables.map((table) => ({
+        ...table,
+        from: changes.mapPos(table.from, 1),
+        contentTo: changes.mapPos(table.contentTo, 1),
+        to: changes.mapPos(table.to, 1),
+    }));
+    parsedTables.set(newDoc, mapped);
+    return mapped;
 }
 
 export function tableOwnsDocEnd(doc: Text, table: TableRange): boolean {
