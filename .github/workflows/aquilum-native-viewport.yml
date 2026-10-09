@@ -1,0 +1,37 @@
+name: Aquilum Native - bounded Markdown viewport correctness
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-viewport-buffer']
+    paths:
+      - 'aquilum-native/common/**'
+      - '.github/workflows/aquilum-native-viewport.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  common-model:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify zero-copy viewport and randomized Unicode edits
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -- --nocapture --test-threads=1 2>&1 | tee viewport-tests.log
+          grep 'AQUILUM_NATIVE_VIEWPORT' viewport-tests.log
+      - name: Upload model-size receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-viewport-${{ matrix.os }}
+          if-no-files-found: warn
+          path: viewport-tests.log
