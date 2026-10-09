@@ -179,6 +179,47 @@ impl TextModel {
         })
     }
 
+    /// Turn the small edited viewport widget content into a single document
+    /// edit. Comparisons use Unicode scalars, then express positions in UTF-16.
+    /// Unmodified common prefix/suffix are preserved in CodeMirror's ChangeSet.
+    ///
+    /// A bounded widget may generate multiple disjoint changes before Save.
+    /// They are represented as ONE contiguous replacement within the viewport,
+    /// preserving the same final text. No full document copy is required.
+    pub fn propose_edited_viewport_text(
+        &self,
+        viewport: &Viewport,
+        edited: &str,
+        max_edited_chars: usize,
+    ) -> Result<Option<ProposedEdit>, ModelError> {
+        if viewport.revision != self.revision {
+            return Err(ModelError::StaleViewport);
+        }
+        if max_edited_chars == 0 || edited.chars().count() > max_edited_chars {
+            return Err(ModelError::InvalidWindowBudget);
+        }
+        if edited == viewport.text {
+            return Ok(None);
+        }
+
+        let before: Vec<char> = viewport.text.chars().collect();
+        let after: Vec<char> = edited.chars().collect();
+        let prefix = before.iter().zip(after.iter())
+            .take_while(|(a, b)| a == b).count();
+
+        let mut suffix = 0usize;
+        while suffix < before.len() - prefix
+            && suffix < after.len() - prefix
+            && before[before.len() - 1 - suffix] == after[after.len() - 1 - suffix]
+        {
+            suffix += 1;
+        }
+        let from_utf16 = before[..prefix].iter().map(|ch| ch.len_utf16()).sum();
+        let to_utf16 = before[..before.len() - suffix].iter().map(|ch| ch.len_utf16()).sum();
+        let replacement: String = after[prefix..after.len() - suffix].iter().collect();
+        self.propose_viewport_change(viewport, from_utf16..to_utf16, &replacement).map(Some)
+    }
+
     /// Call ONLY after the real DocumentHub acknowledged this exact edit.
     /// In-memory model is not mutated on stale/failed external commits.
     pub fn commit_proposed_edit(&mut self, edit: ProposedEdit) -> Result<u64, ModelError> {
@@ -226,6 +267,40 @@ mod tests {
         let mut bytes=Vec::new();
         m.write_to(&mut bytes).unwrap();
         String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn widget_text_diff_uses_utf16_and_preserves_surrounding_text() {
+        let mut model = TextModel::from_str("A🌍B\nX");
+        let view = model.window_at_char(0, 64).unwrap();
+        let proposal = model.propose_edited_viewport_text(&view, "A🪐B\nX", 128)
+            .unwrap().unwrap();
+        assert_eq!(proposal.to_changeset_json(), serde_json::json!([1,[2,"🪐"],3]));
+        model.commit_proposed_edit(proposal).unwrap();
+        assert_eq!(dump(&model), "A🪐B\nX");
+    }
+
+    #[test]
+    fn widget_disjoint_edits_fold_into_one_safe_contiguous_delta() {
+        let mut model = TextModel::from_str("one two three");
+        let view = model.window_at_char(0, 100).unwrap();
+        let next = model.propose_edited_viewport_text(&view, "ONE two THREE", 128)
+            .unwrap().unwrap();
+        assert_eq!(next.utf16_range(), 0..13);
+        model.commit_proposed_edit(next).unwrap();
+        assert_eq!(dump(&model), "ONE two THREE");
+    }
+
+    #[test]
+    fn widget_budget_and_stale_window_are_rejected_before_saving() {
+        let mut model=TextModel::from_str("A🌍B");
+        let before=model.window_at_char(0,64).unwrap();
+        assert_eq!(model.propose_edited_viewport_text(&before, &"X".repeat(30),16).err(),
+            Some(ModelError::InvalidWindowBudget));
+        assert!(model.propose_edited_viewport_text(&before,"A🌍B",16).unwrap().is_none());
+        model.replace_in_viewport(&before, 1..3, "X").unwrap();
+        assert_eq!(model.propose_edited_viewport_text(&before,"A🌍B",16).err(),
+            Some(ModelError::StaleViewport));
     }
 
     #[test]
