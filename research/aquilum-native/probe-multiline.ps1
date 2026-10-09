@@ -102,6 +102,10 @@ foreach ($case in $cases) {
     }
     $all.Add($result)
     Write-Host ("AQUILUM_NATIVE_MULTILINE " + ($result | ConvertTo-Json -Depth 7 -Compress))
+    if ($result.windowObserved -and $sampleCount -lt 20 -and !$budgetExceeded) {
+      $anyNoWindow = $true
+      Write-Warning "Window was observed but editor did not remain alive long enough: $name samples=$sampleCount"
+    }
     if (!$result.windowObserved -and $mode -eq "gpui") {
       Write-Host "GPUI_STDOUT:"
       if (Test-Path $stdout) { Get-Content $stdout -Tail 35 }
