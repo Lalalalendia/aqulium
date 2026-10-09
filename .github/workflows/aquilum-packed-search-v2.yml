@@ -1,0 +1,64 @@
+name: Aquilum candidate packed-search regression and RAM
+
+on:
+  push:
+    branches: ['experiments/search-match-packed-v2-20261009']
+    paths:
+      - '.github/workflows/aquilum-packed-search-v2.yml'
+      - 'research/search-match-packed-v2-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout exact original Aquilum
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Install production-shaped packed offset map
+        shell: pwsh
+        run: |
+          python research/search-match-packed-v2-20261009/apply_patch.py aquilum
+          if ($LASTEXITCODE -ne 0) { throw "Patch failed" }
+          git -C aquilum diff -- aquilum-app/core/src/search/matching.rs | Out-File -Encoding utf8 "matching-packed-v2.diff"
+      - name: Run complete aquilum-core regression suite
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          cargo test -p aquilum-core --release -- --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\candidate-core-suite.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Record live packed-normalizer memory
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          foreach ($size in @(1000000, 5000000)) {
+            $env:AQUILUM_MATCH_SIZE_BYTES = "$size"
+            cargo test -p aquilum-core packed_ram_snapshot --release -- --ignored --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\candidate-ram.log" -Append
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Pop-Location
+      - name: Upload regression, diff, memory
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-packed-v2-evidence
+          if-no-files-found: warn
+          path: |
+            matching-packed-v2.diff
+            candidate-core-suite.log
+            candidate-ram.log
