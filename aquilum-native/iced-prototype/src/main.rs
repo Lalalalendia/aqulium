@@ -92,7 +92,6 @@ fn view(state: &State) -> Element<'_, Message> {
     let editor = text_editor(&selected.editor)
         .placeholder("Markdown note")
         .on_action(Message::Edit)
-        .width(Length::Fill)
         .height(Length::Fill);
     let body = column![
         text("Aquilum Native / Iced (experimental)").size(20),
