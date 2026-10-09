@@ -49,7 +49,7 @@ describe('incremental table range cache', () => {
         expect(first.updated[0]?.model).toBe(first.before[0]?.model);
         expect(first.updated[1]?.model).toBe(first.before[1]?.model);
 
-        const middle = source.indexOf('spacer text') + 3;
+        const middle = source.indexOf('spacer text') + 4 * 'spacer text\n'.length + 3;
         const result = checkChange(source, middle, middle, 'extra ');
         expect(result.updated[0]?.from).toBe(result.before[0]?.from);
         expect(result.updated[1]?.from).toBe(result.before[1]!.from + 6);
