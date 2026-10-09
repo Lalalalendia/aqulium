@@ -1,0 +1,118 @@
+name: Aquilum native RAM and actual WebView2 profiling
+
+on:
+  push:
+    branches: ['experiments/ram-profile-20261009']
+    paths:
+      - '.github/workflows/aquilum-ram-lab.yml'
+      - 'research/ram-20261009/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-core-memory:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Pin original Aquilum
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { throw "Clone failed" }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { throw "Cannot checkout pinned SHA" }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Add disposable Rust memory sampler
+        shell: pwsh
+        run: |
+          python research/ram-20261009/install_ram_patch.py aquilum native
+          if ($LASTEXITCODE -ne 0) { throw "Patch failed" }
+      - name: Profile real Rust Yrs/CRDT core in release mode
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app/core
+          cargo test -p aquilum-core native_ram_profile --release -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ram-native-core.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Upload Rust memory results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-native-core-ram
+          path: ram-native-core.log
+          if-no-files-found: warn
+
+  real-webview-memory:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Pin original Aquilum
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/Freaction/Aquilum.git aquilum
+          if ($LASTEXITCODE -ne 0) { throw "Clone failed" }
+          git -C aquilum checkout --detach a2ac434ba70c189a5e96e8712ec781ca608ad15c
+          if ($LASTEXITCODE -ne 0) { throw "Cannot checkout pinned SHA" }
+          $sha = (git -C aquilum rev-parse HEAD).Trim()
+          if ($sha -ne "a2ac434ba70c189a5e96e8712ec781ca608ad15c") { throw "SHA drift" }
+          "AQUILUM_PINNED_SHA $sha"
+      - name: Generate deterministic 5MB Markdown fixture and patch app test mode
+        shell: pwsh
+        run: |
+          python research/ram-20261009/make_fixture.py lab-vault
+          if ($LASTEXITCODE -ne 0) { throw "Fixture failed" }
+          python research/ram-20261009/install_ram_patch.py aquilum desktop
+          if ($LASTEXITCODE -ne 0) { throw "Patch failed" }
+          $labRoot = (Resolve-Path "lab-vault").Path
+          $note = Join-Path $labRoot "benchmark-5mb.md"
+          "AQUILUM_FIXTURE_BYTES $((Get-Item $note).Length)"
+      - name: Install npm dependencies and typecheck test instrumentation
+        shell: pwsh
+        run: |
+          Push-Location aquilum/aquilum-app
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx tsc --noEmit
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Build actual Aquilum desktop application
+        shell: pwsh
+        run: |
+          $env:VITE_AQUILUM_RAM_LAB = "1"
+          $env:VITE_AQUILUM_RAM_VAULT = (Resolve-Path "lab-vault").Path
+          $env:VITE_AQUILUM_RAM_NOTE = Join-Path $env:VITE_AQUILUM_RAM_VAULT "benchmark-5mb.md"
+          Push-Location aquilum/aquilum-app
+          npx tauri build --no-bundle --no-default-features 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ram-desktop-build.log"
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { exit $code }
+      - name: Measure process tree, memory, real editor transactions and scrolling
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path aquilum/aquilum-app/src-tauri/target/release -Filter aquilum-app.exe -Recurse -File | Select-Object -First 1
+          if (!$exe) { throw "Cannot find native Aquilum executable" }
+          & research/ram-20261009/measure_windows.ps1 -ExePath $exe.FullName -OutputDir "$env:GITHUB_WORKSPACE\ram-results" -MaxSeconds 230 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ram-desktop-run.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload detailed memory and responsiveness receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aquilum-webview-ram
+          if-no-files-found: warn
+          path: |
+            ram-results/
+            ram-desktop-build.log
+            ram-desktop-run.log
