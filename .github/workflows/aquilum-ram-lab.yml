@@ -95,7 +95,7 @@ jobs:
           $env:VITE_AQUILUM_RAM_VAULT = (Resolve-Path "lab-vault").Path
           $env:VITE_AQUILUM_RAM_NOTE = Join-Path $env:VITE_AQUILUM_RAM_VAULT "benchmark-5mb.md"
           Push-Location aquilum/aquilum-app
-          npx tauri build --no-bundle --no-default-features 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ram-desktop-build.log"
+          npx tauri build --no-bundle 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\ram-desktop-build.log"
           $code = $LASTEXITCODE
           Pop-Location
           if ($code -ne 0) { exit $code }
