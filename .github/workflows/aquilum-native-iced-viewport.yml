@@ -1,0 +1,75 @@
+name: Aquilum Native - bounded Iced editable viewport Windows RAM
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-viewport-buffer']
+    paths:
+      - 'aquilum-native/iced-viewport-prototype/**'
+      - 'aquilum-native/Cargo.toml'
+      - '.github/workflows/aquilum-native-iced-viewport.yml'
+      - 'research/aquilum-native/measure-iced-viewport.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-iced-viewport:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test real Iced viewport editor and roundtrip of its text widget
+        shell: pwsh
+        run: |
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-iced-viewport -- --nocapture 2>&1 | Tee-Object -FilePath iced-viewport-tests.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+      - name: Build optimized actual Iced viewport Windows executable
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-iced-viewport --release 2>&1 | Tee-Object -FilePath iced-viewport-build.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $exe="aquilum-native/target/release/aquilum-native-iced-viewport.exe"
+          if(!(Test-Path $exe)){throw "Iced viewport executable missing"}
+          "AQUILUM_NATIVE_ICED_VIEWPORT_BUILT bytes=$((Get-Item $exe).Length)"
+      - name: Generate identical Markdown fixtures and preserve hashes
+        shell: pwsh
+        run: |
+          python research/aquilum-native/fixture.py viewport-fixtures
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          New-Item -ItemType Directory -Path iced-viewport-ram -Force | Out-Null
+          Get-ChildItem viewport-fixtures/*.md | Get-FileHash -Algorithm SHA256 |
+            Sort-Object Path | Select-Object Path,Hash | ConvertTo-Json |
+            Set-Content iced-viewport-ram/hashes-before.json
+      - name: Measure actual Windows HWND, private bytes and working set
+        shell: pwsh
+        run: |
+          $exe=(Resolve-Path "aquilum-native/target/release/aquilum-native-iced-viewport.exe").Path
+          & research/aquilum-native/measure-iced-viewport.ps1 -ExePath $exe -FixtureDir viewport-fixtures -OutputDir iced-viewport-ram 2>&1 |
+            Tee-Object -FilePath iced-viewport-ram/probe.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+      - name: Verify all fixture files are unchanged
+        if: always()
+        shell: pwsh
+        run: |
+          if(!(Test-Path iced-viewport-ram/hashes-before.json)){exit 0}
+          $before=Get-Content iced-viewport-ram/hashes-before.json -Raw | ConvertFrom-Json
+          $after=Get-ChildItem viewport-fixtures/*.md | Get-FileHash -Algorithm SHA256
+          foreach($item in $before){
+            $current=$after | Where-Object { $_.Path -eq $item.Path }
+            if(!$current -or $current.Hash -ne $item.Hash){throw "Fixture modified: $($item.Path)"}
+          }
+          "AQUILUM_NATIVE_VIEWPORT_FIXTURES_UNMODIFIED"
+      - name: Preserve binary and raw measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-iced-viewport-windows
+          if-no-files-found: warn
+          path: |
+            aquilum-native/target/release/aquilum-native-iced-viewport.exe
+            iced-viewport-tests.log
+            iced-viewport-build.log
+            iced-viewport-ram/
+            viewport-fixtures/manifest.json
