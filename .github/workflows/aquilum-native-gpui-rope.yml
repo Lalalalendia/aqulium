@@ -1,0 +1,87 @@
+name: Aquilum Native - real bounded GPUI Rope editor RAM
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-gpui-rope-editor']
+    paths:
+      - 'aquilum-native/**'
+      - 'research/aquilum-native/measure-gpui-rope-ui.ps1'
+      - '.github/workflows/aquilum-native-gpui-rope.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gui-rope-windows:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile native GPUI editor using Rope/DocumentHub UTF-16 deltas
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-gpui-rope --release 2>&1 | Tee-Object -FilePath gpui-rope-build.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $exe="aquilum-native/target/release/aquilum-native-gpui-rope.exe"
+          if(!(Test-Path $exe)){throw "Native GPUI/Rope app was not produced"}
+          Write-Host "AQUILUM_GPUI_ROPE_BUILD_OK bytes=$((Get-Item $exe).Length)"
+      - uses: actions/download-artifact@v4
+        with:
+          name: aquilum-gpui-input-native-windows
+          run-id: 37975167896
+          github-token: ${{ github.token }}
+          path: control-gpui
+      - name: Generate identical test files, never real user documents
+        shell: pwsh
+        run: |
+          python research/aquilum-native/fixture.py gpui-rope-fixtures
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          New-Item -ItemType Directory gpui-rope-results -Force | Out-Null
+          Get-ChildItem gpui-rope-fixtures/*.md | Get-FileHash -Algorithm SHA256 |
+            Sort-Object Path | Select-Object Path,Hash | ConvertTo-Json |
+            Set-Content gpui-rope-results/input-sha256-before.json
+      - name: Require real GUI windows and compare memory 1/5/20MiB, three tabs
+        shell: pwsh
+        run: |
+          $old=Get-ChildItem control-gpui -File -Recurse -Filter aquilum-native-gpui-input.exe | Select-Object -First 1
+          if(!$old){throw "Missing original GPUI editable UI binary"}
+          & research/aquilum-native/measure-gpui-rope-ui.ps1 -FullInputExe $old.FullName -RopeExe aquilum-native/target/release/aquilum-native-gpui-rope.exe -FixtureDir gpui-rope-fixtures -OutputDir gpui-rope-results 2>&1 | Tee-Object -FilePath gpui-rope-results/measure-console.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+      - name: Assert neither editor modified a test note without explicit Save
+        if: always()
+        shell: pwsh
+        run: |
+          if(!(Test-Path gpui-rope-results/input-sha256-before.json)){exit 0}
+          $before=Get-Content gpui-rope-results/input-sha256-before.json -Raw | ConvertFrom-Json
+          $after=Get-ChildItem gpui-rope-fixtures/*.md | Get-FileHash -Algorithm SHA256
+          foreach($entry in $before){
+            $now=$after | Where-Object{$_.Path -eq $entry.Path}
+            if(!$now -or $now.Hash -ne $entry.Hash){throw "Native GUI wrote without Save: $($entry.Path)"}
+          }
+          "AQUILUM_NATIVE_GUI_NO_UNPROMPTED_WRITES"
+      - name: Preserve raw RAM evidence and built Windows editor
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-gpui-rope-windows
+          if-no-files-found: warn
+          path: |
+            gpui-rope-results/
+            gpui-rope-fixtures/manifest.json
+            gpui-rope-build.log
+            aquilum-native/target/release/aquilum-native-gpui-rope.exe
+
+  native-core-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify Unicode diff, stale revisions and actual DocumentHub/Yrs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -p aquilum-native-rope-viewport -- --test-threads=1
