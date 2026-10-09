@@ -1,0 +1,37 @@
+name: Aquilum Native - real DocumentHub/Yrs incremental Rope edits
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-incremental-yrs']
+    paths:
+      - 'aquilum-native/**'
+      - '.github/workflows/aquilum-native-delta-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-core-edit-parity:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify native UTF-16 compact changes against real Aquilum Yrs/SQLite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -p aquilum-native-rope-viewport -- --test-threads=1 2>&1 | tee yrs-delta-tests.log
+          grep -F "test result: ok." yrs-delta-tests.log
+      - name: Save integration verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-yrs-delta-${{ matrix.os }}
+          if-no-files-found: warn
+          path: yrs-delta-tests.log
