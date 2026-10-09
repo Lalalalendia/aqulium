@@ -20,6 +20,7 @@ pub enum ModelError {
     InvalidPosition(PositionError),
     InvalidLine,
     InvalidWindowBudget,
+    EmptyEdit,
 }
 
 impl std::fmt::Display for ModelError {
@@ -37,6 +38,42 @@ pub struct Viewport {
     pub start_line: usize,
     /// At most max_chars Unicode scalar values, not a whole document.
     pub text: String,
+}
+
+/// A prevalidated, not-yet-committed view edit. Send its compact Yrs/CodeMirror
+/// JSON to DocumentHub FIRST, and only commit the rope on acceptance.
+#[derive(Debug, Clone)]
+pub struct ProposedEdit {
+    revision: u64,
+    start_char: usize,
+    end_char: usize,
+    old_utf16_length: usize,
+    from_utf16: usize,
+    to_utf16: usize,
+    replacement: String,
+}
+impl ProposedEdit {
+    /// CodeMirror ChangeSet JSON, identical to existing documentSync transport.
+    /// Example: document "A🌍B", replace 🌍 with X -> [1,[2,"X"],1].
+    /// Only the new text appears in this message, never the full document.
+    pub fn to_changeset_json(&self) -> serde_json::Value {
+        use serde_json::{json, Value};
+        let mut sections = Vec::<Value>::with_capacity(3);
+        if self.from_utf16 > 0 {
+            sections.push(json!(self.from_utf16));
+        }
+        let mut replaced = vec![json!(self.to_utf16 - self.from_utf16)];
+        if !self.replacement.is_empty() {
+            replaced.extend(self.replacement.split('\n').map(|line| json!(line)));
+        }
+        sections.push(Value::Array(replaced));
+        let tail = self.old_utf16_length - self.to_utf16;
+        if tail > 0 {
+            sections.push(json!(tail));
+        }
+        Value::Array(sections)
+    }
+    pub fn utf16_range(&self) -> Range<usize> { self.from_utf16..self.to_utf16 }
 }
 
 pub struct TextModel {
@@ -107,34 +144,65 @@ impl TextModel {
     /// Apply a document change originating in the bounded editor viewport.
     /// Offsets are UTF-16 code units within viewport.text, NOT document-global.
     /// Do not call with arbitrary text from another revision.
-    pub fn replace_in_viewport(
-        &mut self,
+    /// Plan a small change against the current immutable view, never moving
+    /// or copying the rest of the document. Stale/forged views are rejected.
+    pub fn propose_viewport_change(
+        &self,
         viewport: &Viewport,
         utf16_range: Range<usize>,
         replacement: &str,
-    ) -> Result<u64, ModelError> {
+    ) -> Result<ProposedEdit, ModelError> {
         if viewport.revision != self.revision {
             return Err(ModelError::StaleViewport);
         }
         let range = range_utf16_to_bytes(&viewport.text, utf16_range.start, utf16_range.end)
             .map_err(ModelError::InvalidPosition)?;
-        let first_local_char = viewport.text[..range.start].chars().count();
-        let last_local_char = viewport.text[..range.end].chars().count();
-        let first = viewport.start_char + first_local_char;
-        let last = viewport.start_char + last_local_char;
-        // An immutable viewport whose revision matches must be a true slice.
-        // A malicious/inconsistent viewport must not edit unrelated content.
         if viewport.end_char != viewport.start_char + viewport.text.chars().count()
             || viewport.end_char > self.rope.len_chars()
             || self.rope.slice(viewport.start_char..viewport.end_char) != viewport.text.as_str()
         {
             return Err(ModelError::StaleViewport);
         }
+        let start_char = viewport.start_char + viewport.text[..range.start].chars().count();
+        let end_char = viewport.start_char + viewport.text[..range.end].chars().count();
+        if start_char == end_char && replacement.is_empty() {
+            return Err(ModelError::EmptyEdit);
+        }
+        Ok(ProposedEdit {
+            revision: self.revision,
+            start_char,
+            end_char,
+            old_utf16_length: self.rope.len_utf16_cu(),
+            from_utf16: self.rope.char_to_utf16_cu(start_char),
+            to_utf16: self.rope.char_to_utf16_cu(end_char),
+            replacement: replacement.to_owned(),
+        })
+    }
 
-        self.rope.remove(first..last);
-        self.rope.insert(first, replacement);
+    /// Call ONLY after the real DocumentHub acknowledged this exact edit.
+    /// In-memory model is not mutated on stale/failed external commits.
+    pub fn commit_proposed_edit(&mut self, edit: ProposedEdit) -> Result<u64, ModelError> {
+        if edit.revision != self.revision
+            || self.rope.len_utf16_cu() != edit.old_utf16_length
+        {
+            return Err(ModelError::StaleViewport);
+        }
+        self.rope.remove(edit.start_char..edit.end_char);
+        self.rope.insert(edit.start_char, &edit.replacement);
         self.revision = self.revision.checked_add(1).expect("revision overflow");
         Ok(self.revision)
+    }
+
+    /// Local-only helper for independent text-model tests; production code
+    /// should propose, send to DocumentHub, then commit the same proposal.
+    pub fn replace_in_viewport(
+        &mut self,
+        viewport: &Viewport,
+        utf16_range: Range<usize>,
+        replacement: &str,
+    ) -> Result<u64, ModelError> {
+        let planned = self.propose_viewport_change(viewport, utf16_range, replacement)?;
+        self.commit_proposed_edit(planned)
     }
 
     /// Stream to a writer without copying the entire Rope into a String.
