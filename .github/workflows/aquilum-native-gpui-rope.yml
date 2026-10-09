@@ -1,0 +1,58 @@
+name: Aquilum Native - bounded GPUI Rope editor
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-gpui-rope-viewport']
+    paths:
+      - 'aquilum-native/**'
+      - '.github/workflows/aquilum-native-gpui-rope.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rope-model-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test snapshot diffs and actual DocumentHub Yrs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-common -p aquilum-native-rope-viewport -- --test-threads=1 2>&1 | tee bounded-gpui-tests.log
+      - name: Preserve test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bounded-model-${{ matrix.os }}
+          path: bounded-gpui-tests.log
+
+  gpui-windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile real GPUI bounded editor
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-gpui-rope --release 2>&1 | Tee-Object -FilePath gpui-bounded-build.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          $exe="aquilum-native/target/release/aquilum-native-gpui-rope.exe"
+          if(!(Test-Path $exe)){throw "Missing bounded editor binary"}
+          Write-Host "AQUILUM_GPUI_BOUNDED_BUILD_OK bytes=$((Get-Item $exe).Length)"
+      - name: Preserve executable and build receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpui-bounded-release-windows
+          path: |
+            gpui-bounded-build.log
+            aquilum-native/target/release/aquilum-native-gpui-rope.exe
