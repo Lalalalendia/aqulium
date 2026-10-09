@@ -1,0 +1,97 @@
+name: Aquilum Native - bounded Rope vs Iced headless RAM
+
+on:
+  push:
+    branches: ['experiments/aquilum-native-rope-viewport']
+    paths:
+      - 'aquilum-native/rope-viewport/**'
+      - 'aquilum-native/Cargo.toml'
+      - 'aquilum-native/iced-prototype/src/bin/iced-content-cost.rs'
+      - 'research/aquilum-native/measure-headless-models.ps1'
+      - '.github/workflows/aquilum-native-rope-ram.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test Rope viewport, UTF-16 boundaries and stale revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-rope-viewport -- --test-threads=1 2>&1 | tee rope-tests-linux.log
+      - name: Preserve unit test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rope-model-unit-linux
+          if-no-files-found: warn
+          path: rope-tests-linux.log
+
+  model-memory-windows:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build bounded Rope model Windows release executable
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-rope-viewport --bin rope-memory --release 2>&1 | Tee-Object rope-build.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          if(!(Test-Path aquilum-native/target/release/rope-memory.exe)){throw "No Rope model executable"}
+      - name: Build Iced Content model control on SAME Windows runner
+        shell: pwsh
+        run: |
+          cargo build --manifest-path aquilum-native/Cargo.toml -p aquilum-native-iced --bin iced-content-cost --release 2>&1 | Tee-Object iced-control-build.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          if(!(Test-Path aquilum-native/target/release/iced-content-cost.exe)){throw "No Iced headless control executable"}
+      - name: Verify bounded viewport and Unicode edits on Windows
+        shell: pwsh
+        run: |
+          cargo test --manifest-path aquilum-native/Cargo.toml -p aquilum-native-rope-viewport -- --test-threads=1 2>&1 | Tee-Object rope-tests-windows.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+      - name: Generate exactly 1/5/20 MiB UTF-8 Markdown
+        shell: pwsh
+        run: |
+          python research/aquilum-native/fixture.py native-model-fixtures
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+          New-Item -ItemType Directory -Path native-model-ram -Force | Out-Null
+          Get-ChildItem native-model-fixtures/*.md | Get-FileHash -Algorithm SHA256 |
+            Sort-Object Path | Select-Object Path,Hash | ConvertTo-Json |
+            Set-Content native-model-ram/input-sha256-before.json
+      - name: Compare Rope and Iced headless RAM in ABBA process order
+        shell: pwsh
+        run: |
+          & research/aquilum-native/measure-headless-models.ps1 -RopeExe aquilum-native/target/release/rope-memory.exe -IcedModelExe aquilum-native/target/release/iced-content-cost.exe -FixtureDir native-model-fixtures -OutputDir native-model-ram 2>&1 | Tee-Object -FilePath native-model-ram/probe-console.log
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
+      - name: Verify experiments never modified Markdown test files
+        if: always()
+        shell: pwsh
+        run: |
+          if(!(Test-Path native-model-ram/input-sha256-before.json)){exit 0}
+          $before=Get-Content native-model-ram/input-sha256-before.json -Raw | ConvertFrom-Json
+          $after=Get-ChildItem native-model-fixtures/*.md | Get-FileHash -Algorithm SHA256
+          foreach($entry in $before){
+            $now=$after|Where-Object {$_.Path -eq $entry.Path}
+            if(!$now -or $now.Hash -ne $entry.Hash){throw "Input modified by model: $($entry.Path)"}
+          }
+          "AQUILUM_NATIVE_ROPE_INPUTS_UNMODIFIED"
+      - name: Preserve per-process RAM, tests, fixtures and build receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-rope-vs-iced-windows-model-memory
+          if-no-files-found: warn
+          path: |
+            native-model-ram/
+            native-model-fixtures/manifest.json
+            rope-build.log
+            iced-control-build.log
+            rope-tests-windows.log
