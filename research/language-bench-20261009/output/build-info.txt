@@ -1,0 +1,11 @@
+SOURCE_SHA=7672a10346e5adbc45dce3add885febdb34c8755
+v22.23.3
+10.9.9
+rustc 1.99.0 (b940084d7 2026-09-28)
+cargo 1.99.0 (5f94df478 2026-08-27)
+wasm-pack 0.15.0
+aquilum-language-microbench@1.0.0 /home/runner/work/aqulium/aqulium/research/language-bench-20261009
+├── esbuild@0.25.12
+├── rescript@12.3.1
+└── typescript@5.8.3
+
