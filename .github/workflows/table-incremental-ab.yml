@@ -1,0 +1,99 @@
+name: Aquilum incremental tables - correctness and 5MB A-B
+
+on:
+  push:
+    branches: ['opt/tables-incremental-20261009']
+    paths:
+      - '.github/workflows/table-incremental-ab.yml'
+      - 'aquilum-app/src/components/Editor/extensions/tables/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned packages
+        working-directory: aquilum-app
+        run: npm ci --no-audit --no-fund
+      - name: Run all frontend tests, including table mutation and reverse-change regressions
+        working-directory: aquilum-app
+        run: npm test
+      - name: Validate TypeScript and production frontend bundle
+        working-directory: aquilum-app
+        run: npm run build
+
+  actual-codemirror-ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check exact original baseline and create separate worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e 9c69e76b7e980c672988304e62c2bd9af914be73^{commit}
+          git worktree add --detach ../aqulium-table-baseline 9c69e76b7e980c672988304e62c2bd9af914be73
+          cp aquilum-app/src/components/Editor/extensions/tables/incremental.perf.test.ts ../aqulium-table-baseline/aquilum-app/src/components/Editor/extensions/tables/incremental.perf.test.ts
+          test -f ../aqulium-table-baseline/aquilum-app/src/components/Editor/extensions/tables/preview.ts
+      - name: Install baseline frontend dependencies
+        working-directory: ../aqulium-table-baseline/aquilum-app
+        run: npm ci --no-audit --no-fund
+      - name: Install optimized frontend dependencies
+        working-directory: aquilum-app
+        run: npm ci --no-audit --no-fund
+      - name: Profile baseline CodeMirror transaction on 5MB
+        working-directory: ../aqulium-table-baseline/aquilum-app
+        env:
+          AQUILUM_TABLE_VARIANT: baseline
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run src/components/Editor/extensions/tables/incremental.perf.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/baseline-tables.log"
+      - name: Profile optimized CodeMirror transaction on same 5MB
+        working-directory: aquilum-app
+        env:
+          AQUILUM_TABLE_VARIANT: incremental
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run src/components/Editor/extensions/tables/incremental.perf.test.ts 2>&1 | tee "$GITHUB_WORKSPACE/incremental-tables.log"
+      - name: Compare both benchmark receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep 'AQUILUM_TABLE_BENCH' baseline-tables.log
+          grep 'AQUILUM_TABLE_BENCH' incremental-tables.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          def read(path):
+              lines=Path(path).read_text().splitlines()
+              return json.loads(next(line.split("AQUILUM_TABLE_BENCH ",1)[1] for line in lines if "AQUILUM_TABLE_BENCH " in line))
+          baseline=read("baseline-tables.log")
+          incremental=read("incremental-tables.log")
+          assert baseline["table_count"] == incremental["table_count"]
+          assert baseline["sample_count"] == incremental["sample_count"] == 120
+          print(f"AQUILUM_TABLE_AB baseline_p50={baseline['p50_ms']:.3f}ms incremental_p50={incremental['p50_ms']:.3f}ms speedup={baseline['p50_ms']/incremental['p50_ms']:.2f}x")
+          PY
+      - name: Upload both raw measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-table-incremental-ab
+          path: |
+            baseline-tables.log
+            incremental-tables.log
+          if-no-files-found: warn
