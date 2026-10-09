@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           npm install --no-audit --no-fund
           node --version
-          ./node_modules/.bin/rescript -version
+          ./node_modules/.bin/rescript --version
           ./node_modules/.bin/esbuild --version
       - name: Compile real ReScript and both equivalent optimized JS bundles
         working-directory: research/language-bench-20261009
