@@ -48,7 +48,7 @@ foreach ($scenario in $cases) {
         }
       }
       # HWND creation is NOT "first paint" and NOT keyboard-to-pixel latency.
-      if ($null -eq $windowMs) { $incomplete = $true }
+      if ($null -eq $windowMs) { $incomplete = $true; Write-Warning "Window not observed for $mode / $($scenario.Name) on this Windows runner" }
       Start-Sleep -Seconds 3
       for ($n = 0; $n -lt 6; $n++) {
         $child.Refresh()
@@ -86,7 +86,7 @@ foreach ($scenario in $cases) {
       sampleCount = $samples.Count
       processMemory = $samples
       startedAtUtc = $startedAt.ToString("o")
-      benchmarkWarning = "Not like-for-like: Iced hosts full multiline editor; GPUI is a paged viewer"
+      benchmarkWarning = "Iced text_editor vs GPUI Component Input multiline. Real keyboard/IME feature equivalence still unproven."
     }
     $results.Add($result)
     Write-Host ("AQUILUM_NATIVE_RAM " + ($result | ConvertTo-Json -Depth 8 -Compress))
