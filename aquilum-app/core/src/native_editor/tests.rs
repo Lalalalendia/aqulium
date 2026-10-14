@@ -427,3 +427,14 @@ fn large_5mb_document_viewport_window_and_ab_profile() {
         priv_after
     );
 }
+
+#[test]
+fn native_explicit_save_reports_missing_disk_file() {
+    let (dir, core, _) = open_test_core();
+    let note = dir.path().join("deleted-after-edit.md");
+    fs::write(&note, "first version\n").unwrap();
+    let mut editor = NativeEditorSession::open(Arc::clone(&core), &note, "save-error-test").unwrap();
+    editor.handle_key(KeyCommand::InsertText("changed ".to_owned())).unwrap();
+    fs::remove_file(&note).unwrap();
+    assert!(editor.save_now().is_err(), "Ctrl+S must not claim success after the file disappears");
+}

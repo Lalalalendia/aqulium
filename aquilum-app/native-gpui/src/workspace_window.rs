@@ -63,7 +63,6 @@ pub enum GpuiActiveCenterSurface {
     EmptyState,
 }
 
-#[derive(Debug)]
 pub struct GpuiWindowLayoutFrame {
     pub window_title: String,
     pub theme: String,

@@ -184,7 +184,13 @@ impl DocumentHub {
         let key = identity(path);
         let mut sessions = self.sessions.lock().expect("document sessions");
         let entry = sessions.get_mut(&key).ok_or(HubError::NotOpen)?;
-        self.write_entry(core, &key, entry);
+        if entry.moving && entry.session.dirty() {
+            return Err(HubError::Session(SessionError::Disk {
+                code: "moving",
+                message: "cannot save while the document is being relocated".to_owned(),
+            }));
+        }
+        let _ = self.write_entry(core, &key, entry)?;
         self.compact(&key, &entry.session);
         Ok(entry.session.version())
     }
@@ -242,7 +248,7 @@ impl DocumentHub {
             if entry.session.version() != before {
                 announce_change(core, &entry_path, entry.session.version());
             }
-            self.write_entry_as(core, key, entry, source);
+            self.write_entry_as(core, key, entry, source)?;
             Ok(entry.session.version())
         })
     }
@@ -261,7 +267,7 @@ impl DocumentHub {
                 entry.session.revert(version_text, previous_text, SYSTEM_CLIENT, &self.io(core, &entry_path, key));
             if changed {
                 announce_change(core, &entry_path, entry.session.version());
-                self.write_entry_as(core, key, entry, source);
+                self.write_entry_as(core, key, entry, source)?;
             }
             Ok(changed)
         })
@@ -306,14 +312,14 @@ impl DocumentHub {
             return;
         }
         let mut entry = sessions.remove(&key).expect("entry exists");
-        self.write_entry(core, &key, &mut entry);
+        let _ = self.write_entry(core, &key, &mut entry);
         self.compact(&key, &entry.session);
     }
 
     pub fn flush_all(&self, core: &Core) {
         let mut sessions = self.sessions.lock().expect("document sessions");
         for (key, entry) in sessions.iter_mut() {
-            self.write_entry(core, key, entry);
+            let _ = self.write_entry(core, key, entry);
         }
     }
 
@@ -364,7 +370,7 @@ impl DocumentHub {
         {
             let mut sessions = self.sessions.lock().expect("document sessions");
             for (key, entry) in sessions.iter_mut().filter(|(key, _)| inside(key, &folder_key)) {
-                self.write_entry(core, key, entry);
+                let _ = self.write_entry(core, key, entry);
                 entry.moving = true;
             }
         }
@@ -382,7 +388,7 @@ impl DocumentHub {
     fn write_due(&self, core: &Core, key: &str) {
         let mut sessions = self.sessions.lock().expect("document sessions");
         if let Some(entry) = sessions.get_mut(key) {
-            self.write_entry(core, key, entry);
+            let _ = self.write_entry(core, key, entry);
         }
     }
 
@@ -405,13 +411,13 @@ impl DocumentHub {
         }
     }
 
-    fn write_entry(&self, core: &Core, key: &str, entry: &mut Entry) {
-        self.write_entry_as(core, key, entry, Source::Me);
+    fn write_entry(&self, core: &Core, key: &str, entry: &mut Entry) -> Result<(), SessionError> {
+        self.write_entry_as(core, key, entry, Source::Me)
     }
 
-    fn write_entry_as(&self, core: &Core, key: &str, entry: &mut Entry, source: Source) {
+    fn write_entry_as(&self, core: &Core, key: &str, entry: &mut Entry, source: Source) -> Result<(), SessionError> {
         if !entry.session.dirty() || entry.moving {
-            return;
+            return Ok(());
         }
         let path = entry.path.clone();
         let before = entry.session.version();
@@ -420,11 +426,12 @@ impl DocumentHub {
             announce_change(core, &path, entry.session.version());
         }
         let path_text = path.to_string_lossy().into_owned();
-        core.emit(match result {
+        core.emit(match &result {
             Ok(()) => CoreEvent::DocumentSaved(DocumentEvent { path: path_text, version: entry.session.version() }),
             Err(SessionError::Missing) => CoreEvent::DocumentMissing(DocumentEvent { path: path_text, version: 0 }),
             Err(error) => CoreEvent::DocumentSaveFailed(SaveFailed { path: path_text, reason: error.to_string() }),
         });
+        result
     }
 
     fn load(&self, key: &str) -> Vec<Vec<u8>> {
