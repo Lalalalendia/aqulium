@@ -186,6 +186,36 @@ impl DocumentSession {
         Ok(true)
     }
 
+    /// Direct UTF-16 `TextEdit` push for the native Rust editor (Strangler Fig Stage 0-2).
+    /// Avoids JSON serialization overhead while recording the exact same Yrs CRDT update
+    /// and change log entries for external consumers.
+    pub fn push_edits(
+        &mut self,
+        client: &str,
+        version: u64,
+        edits: &[TextEdit],
+        io: &impl SessionIo,
+    ) -> Result<bool, SessionError> {
+        if version != self.version {
+            return Ok(false);
+        }
+        if edits.is_empty() {
+            return Ok(true);
+        }
+        let doc_length = self.replica.len();
+        let mut cursor = 0;
+        for edit in edits {
+            if edit.from < cursor || edit.from > edit.to || edit.to > doc_length {
+                return Err(SessionError::Change(super::changes::invalid_edit_range()));
+            }
+            cursor = edit.to;
+        }
+        if self.apply(edits, client, io) {
+            self.dirty = true;
+        }
+        Ok(true)
+    }
+
     pub fn pull(&self, version: u64) -> Pull {
         if version < self.log_start || version > self.version {
             return Pull::Resync;

@@ -1,0 +1,52 @@
+name: Aquilum Native Rust Model (experimental)
+
+on:
+  pull_request:
+    paths:
+      - 'aquilum-app/core/**'
+      - 'aquilum-app/native-gpui/**'
+      - 'aquilum-app/src-tauri/Cargo.toml'
+      - '.github/workflows/native-rust-model-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-model-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile shared core and headless native model
+        run: cargo check --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core -p aquilum-native-gpui
+      - name: Run native editor and shell unit tests
+        run: cargo test --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core --release native_ -- --test-threads=1
+      - name: Verify model smoke (not GUI parity)
+        run: cargo run --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui -- --verify-model-smoke
+      - name: Verify cutover gate fails closed
+        shell: bash
+        run: |
+          set +e
+          cargo run --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui -- --verify-cutover
+          code=$?
+          set -e
+          test "$code" -eq 2
+
+  rust-model-windows:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check Rust core and native model on Windows
+        shell: pwsh
+        run: |
+          cargo check --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core -p aquilum-native-gpui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run targeted model tests
+        shell: pwsh
+        run: |
+          cargo test --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core --release native_ -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

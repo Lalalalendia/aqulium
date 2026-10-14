@@ -1,4 +1,5 @@
 use super::io::HubIo;
+use super::merge::TextEdit;
 use super::session::{DocumentSession, LoggedChange, Pull, SessionError, SYSTEM_CLIENT};
 use super::store::DocumentStore;
 use crate::history::Source;
@@ -152,6 +153,47 @@ impl DocumentHub {
             announce_change(core, &entry_path, entry.session.version());
         }
         Ok(accepted)
+    }
+
+    /// Applies UTF-16 `TextEdit` batches directly from the native Rust editor without
+    /// intermediate JSON serialization, scheduling background persistence and emitting
+    /// `CoreEvent::DocumentChanged`.
+    pub fn push_edits(
+        &self,
+        core: &Core,
+        path: &Path,
+        version: u64,
+        client: &str,
+        edits: &[TextEdit],
+    ) -> Result<bool, HubError> {
+        let key = identity(path);
+        let mut sessions = self.sessions.lock().expect("document sessions");
+        let entry = sessions.get_mut(&key).ok_or(HubError::NotOpen)?;
+        let entry_path = entry.path.clone();
+        let accepted = entry.session.push_edits(client, version, edits, &self.io(core, &entry_path, &key))?;
+        if accepted {
+            self.schedule(&key, self.save_delay(core));
+            announce_change(core, &entry_path, entry.session.version());
+        }
+        Ok(accepted)
+    }
+
+    /// Immediately writes any pending changes for an open document to disk and compacts
+    /// its SQLite CRDT snapshot. Used for explicit `Ctrl+S` saves and safe tab switches.
+    pub fn flush(&self, core: &Core, path: &Path) -> Result<u64, HubError> {
+        let key = identity(path);
+        let mut sessions = self.sessions.lock().expect("document sessions");
+        let entry = sessions.get_mut(&key).ok_or(HubError::NotOpen)?;
+        self.write_entry(core, &key, entry);
+        self.compact(&key, &entry.session);
+        Ok(entry.session.version())
+    }
+
+    /// Returns whether the open session currently has unsaved in-memory edits.
+    pub fn is_dirty(&self, path: &Path) -> Result<bool, HubError> {
+        let sessions = self.sessions.lock().expect("document sessions");
+        let entry = sessions.get(&identity(path)).ok_or(HubError::NotOpen)?;
+        Ok(entry.session.dirty())
     }
 
     pub fn pull(&self, path: &Path, version: u64) -> Result<PullResult, HubError> {
