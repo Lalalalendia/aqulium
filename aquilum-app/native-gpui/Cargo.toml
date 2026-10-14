@@ -5,6 +5,7 @@ description = "Experimental headless Rust workspace, Rope editor and scene model
 authors = ["Dmitriy Chaplinskiy"]
 license = "AGPL-3.0-only"
 edition = "2021"
+workspace = "../src-tauri"
 
 [dependencies]
 aquilum-core = { path = "../core" }
