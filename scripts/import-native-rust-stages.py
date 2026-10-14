@@ -42,8 +42,24 @@ def fix_code(rel, text):
             text = match.group(2) + "\n" + match.group(1) + text[match.end():]
     if rel == "aquilum-app/core/src/native_editor/tests.rs":
         # The uploaded benchmark println has unescaped JSON quotes. Do not merge bad Rust.
-        if 'println!("AQUILUM_GPUI_ROPE_BENCH {{"input_bytes":' in text:
-            raise RuntimeError("Fix invalid JSON format string in native_editor/tests.rs first")
+        bad = 'AQUILUM_GPUI_ROPE_BENCH {{"input_bytes":'
+        if bad in text:
+            # Escape JSON quotes for Rust's format string, preserving {{ and }}.
+            lines = text.splitlines(keepends=True)
+            for i, line in enumerate(lines):
+                if bad in line:
+                    lines[i] = line.replace('"input_bytes"', '\\"input_bytes\\"').replace(
+                        '"rope_allocated_mib"', '\\"rope_allocated_mib\\"').replace(
+                        '"viewport_max_chars"', '\\"viewport_max_chars\\"').replace(
+                        '"viewport_kib"', '\\"viewport_kib\\"').replace(
+                        '"open_ms"', '\\"open_ms\\"').replace(
+                        '"dispatch_p50_ms"', '\\"dispatch_p50_ms\\"').replace(
+                        '"dispatch_p95_ms"', '\\"dispatch_p95_ms\\"').replace(
+                        '"ws_before_mib"', '\\"ws_before_mib\\"').replace(
+                        '"ws_after_mib"', '\\"ws_after_mib\\"').replace(
+                        '"priv_before_mib"', '\\"priv_before_mib\\"').replace(
+                        '"priv_after_mib"', '\\"priv_after_mib\\"')
+            text = "".join(lines)
     if rel == "aquilum-app/core/src/native_shell/cutover.rs":
         marker = "let ready_to_remove_webview2 = stages.iter().all(|s| s.passed);"
         if marker not in text:
