@@ -247,8 +247,14 @@ impl NativeWorkspaceShell {
         let live_limit = self.core.settings.get_config().editor.live_tabs.max(1) as usize;
         while self.editors.len() >= live_limit {
             let Some(oldest) = self.editor_lru.pop_front() else { break };
-            if let Some(mut evicted) = self.editors.remove(&oldest) {
-                let _ = evicted.save_now();
+            if let Some(evicted) = self.editors.get_mut(&oldest) {
+                if let Err(error) = evicted.save_now() {
+                    // Never drop the only live editor copy when disk persistence failed.
+                    self.editor_lru.push_front(oldest);
+                    return Err(format!("cannot evict unsaved editor: {error}"));
+                }
+            }
+            if let Some(evicted) = self.editors.remove(&oldest) {
                 evicted.close();
             }
         }
