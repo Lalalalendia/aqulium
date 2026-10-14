@@ -151,7 +151,7 @@ fn should_coalesce(prev: &UndoEntry, next: &UndoEntry) -> bool {
         .chars()
         .next()
         .is_some_and(char::is_whitespace);
-    if prev_ends_space && !next_starts_space {
+    if !prev_ends_space && next_starts_space {
         return false;
     }
     true

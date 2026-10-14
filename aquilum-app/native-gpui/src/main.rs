@@ -52,6 +52,7 @@ fn main() {
         _ => default_app_data_dir(),
     };
 
+    std::fs::create_dir_all(&app_data_dir).expect("failed to create native app-data directory");
     let core = Core::open(&app_data_dir, Arc::new(StdoutEventSink));
     if target_path.is_dir() {
         let shell = NativeWorkspaceShell::open(Arc::clone(&core), &target_path, "gpui-main", 0)

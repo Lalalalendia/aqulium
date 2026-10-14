@@ -36,6 +36,7 @@ pub fn verify_strangler_fig_cutover(temp_root: &Path) -> Result<CutoverReport, S
     let app_data = temp_root.join("cutover-app-data");
     let vault = temp_root.join("cutover-vault");
     fs::create_dir_all(&vault).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
 
     let sink = Arc::new(CutoverSink::default());
     let core = Core::open(&app_data, Arc::clone(&sink) as Arc<dyn EventSink>);

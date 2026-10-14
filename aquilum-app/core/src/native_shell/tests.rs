@@ -20,6 +20,7 @@ impl EventSink for ShellTestSink {
 fn stage1_shell_tabs_navigation_and_sticky_ui_state() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -53,6 +54,7 @@ fn stage1_shell_tabs_navigation_and_sticky_ui_state() {
 fn stage4_interactive_markdown_tables_tasks_wikilinks_and_dataview() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -101,6 +103,7 @@ fn stage4_interactive_markdown_tables_tasks_wikilinks_and_dataview() {
 fn stage6_book_reader_fb2_cfi_and_quote_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -166,6 +169,7 @@ fn stage7_strangler_fig_smoke_never_authorizes_webview_removal() {
 fn phase2_in_page_search_replace_inline_formatting_and_smart_dashes() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -217,6 +221,7 @@ fn phase2_in_page_search_replace_inline_formatting_and_smart_dashes() {
 fn phase2_book_library_import_companion_page_and_progress_sync() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -267,6 +272,7 @@ fn phase2_book_library_import_companion_page_and_progress_sync() {
 fn phase2_trash_deletions_restore_and_retention_cleanup() {
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();
@@ -295,7 +301,7 @@ fn phase2_native_html_and_pdf_export_without_webview2() {
     let note_path = dir.path().join("Отчёт.md");
     fs::write(
         &note_path,
-        "---\ntitle: Отчёт\n---\n# Заголовок отчёта\nСвязь с [[База|Базой знаний]].\n- [x] Готово\n| А | Б |\n| --- | --- |\n| 1 | 2 |\n",
+        "---\ntitle: Отчёт\n---\n# Заголовок отчёта\nСвязь с [[База|Базой знаний]].\n- [x] Готово\n\n| А | Б |\n| --- | --- |\n| 1 | 2 |\n",
     )
     .unwrap();
 
@@ -375,6 +381,7 @@ fn phase3_frontmatter_inspector_and_media_embeds() {
 
     let dir = tempfile::tempdir().unwrap();
     let sink = Arc::new(ShellTestSink::default());
+    fs::create_dir_all(dir.path().join("data")).unwrap();
     let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
     let vault = dir.path().join("vault");
     fs::create_dir_all(&vault).unwrap();

@@ -19,7 +19,9 @@ impl EventSink for TestSink {
 fn open_test_core() -> (tempfile::TempDir, Arc<Core>, Arc<TestSink>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let sink = Arc::new(TestSink::default());
-    let core = Core::open(&dir.path().join("app-data"), Arc::clone(&sink) as Arc<dyn EventSink>);
+    let app_data = dir.path().join("app-data");
+    fs::create_dir_all(&app_data).expect("create app data");
+    let core = Core::open(&app_data, Arc::clone(&sink) as Arc<dyn EventSink>);
     (dir, core, sink)
 }
 
