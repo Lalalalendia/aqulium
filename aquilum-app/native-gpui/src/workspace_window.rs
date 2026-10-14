@@ -38,7 +38,7 @@ pub enum GpuiModalOverlay {
     Settings,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum GpuiActiveCenterSurface {
     Editor {
         frame: GpuiFrameState,
@@ -63,7 +63,7 @@ pub enum GpuiActiveCenterSurface {
     EmptyState,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct GpuiWindowLayoutFrame {
     pub window_title: String,
     pub theme: String,

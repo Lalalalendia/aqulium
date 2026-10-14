@@ -246,7 +246,7 @@ pub enum InteractiveLinkTarget {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EvaluatedDataviewBlock {
     pub start_line: usize,
     pub end_line: usize,

@@ -92,7 +92,7 @@ impl NativeWindowStateManager {
         if let Some(parent) = self.path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        write_file_atomic_impl(&self.path, &json, None).map_err(|e| e.to_string())
+        write_file_atomic_impl(&self.path, &json, None).map(|_| ()).map_err(|e| e.to_string())
     }
 }
 

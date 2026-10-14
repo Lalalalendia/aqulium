@@ -125,7 +125,7 @@ impl PageSearchState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct WikiAutocompletePopup {
     /// Character range of the `[[query` prefix in the `RopeBuffer` (starting right after `[[`).
     pub query_char_range: (usize, usize),
