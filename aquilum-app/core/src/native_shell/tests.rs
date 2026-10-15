@@ -79,6 +79,7 @@ fn stage4_interactive_markdown_tables_tasks_wikilinks_and_dataview() {
         let (table_start, _, _) = editor.rope().line_char_bounds(5);
         editor.set_selection(Selection::caret(table_start + 2));
         assert!(editor.table_insert_column_after().unwrap());
+        assert_eq!(editor.rope().char_to_line_col(editor.selection().head).line, 5);
         assert!(editor.table_set_column_alignment(ColumnAlignment::Right).unwrap());
 
         let parsed = parse_table_at_line(editor.rope(), 5).expect("parsed table");
