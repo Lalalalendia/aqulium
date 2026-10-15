@@ -68,7 +68,12 @@ impl BookLibraryController {
                 continue;
             }
             let path = entry.path();
-            if path
+            // Only hide files and directories *within* the workspace.
+            // An absolute workspace root may itself be inside a hidden
+            // directory (e.g. tempfile's `.tmp...`), which must not hide
+            // every book returned by the scan.
+            let relative_path = path.strip_prefix(workspace_root).unwrap_or(path);
+            if relative_path
                 .components()
                 .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
             {
