@@ -38,7 +38,7 @@ jobs:
           export LIBGL_ALWAYS_SOFTWARE=1
           xvfb-run -a timeout 300s bash -c '
             set -euo pipefail
-            RUST_BACKTRACE=1 cargo run --locked \
+            RUST_BACKTRACE=1 cargo run \
               --manifest-path aquilum-app/native-desktop/Cargo.toml \
               -- "$TEST_VAULT" --app-data "$TEST_DATA" > "$TEST_LOG" 2>&1 &
             app_pid=$!
