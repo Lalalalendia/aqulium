@@ -492,3 +492,57 @@ fn phase3_window_state_tab_reorder_and_history_diff() {
     assert!(diff.iter().any(|l| l.kind == HistoryDiffKind::Added && l.text == "Новая 2"));
 }
 
+
+
+#[test]
+fn native_book_library_reports_unreadable_epub_without_fictitious_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(ShellTestSink::default());
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let core = Core::open(&data, Arc::clone(&sink) as Arc<dyn EventSink>);
+    let vault = dir.path().join("vault");
+    let book_dir = vault.join(core.settings.get_config().files.folder);
+    fs::create_dir_all(&book_dir).unwrap();
+    fs::write(book_dir.join("broken.epub"), b"not an EPUB archive").unwrap();
+    let shell = NativeWorkspaceShell::open(Arc::clone(&core), &vault, "invalid-epub", 1_000).unwrap();
+    let books = shell.book_library.list_books(&vault, shell.tabs.workspace_id());
+    assert_eq!(books.len(), 1);
+    assert_eq!(books[0].title, "broken");
+    assert_eq!(books[0].total_pages, 0);
+    assert!(books[0].parse_error.as_ref().is_some_and(|error| error.contains("EPUB")));
+}
+
+#[test]
+fn native_book_import_does_not_overwrite_and_rolls_back_parse_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink = Arc::new(ShellTestSink::default());
+    let data = dir.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let core = Core::open(&data, Arc::clone(&sink) as Arc<dyn EventSink>);
+    let vault = dir.path().join("vault");
+    let files_folder = core.settings.get_config().files.folder;
+    let book_dir = vault.join(files_folder);
+    fs::create_dir_all(&book_dir).unwrap();
+    let shell = NativeWorkspaceShell::open(Arc::clone(&core), &vault, "safe-import", 1_000).unwrap();
+    let ws_id = shell.tabs.workspace_id();
+
+    let invalid_external = dir.path().join("invalid.epub");
+    fs::write(&invalid_external, b"corrupt ZIP").unwrap();
+    assert!(shell.book_library.import_book_and_create_page(
+        &vault, ws_id, &invalid_external
+    ).is_err());
+    assert!(!book_dir.join("invalid.epub").exists());
+
+    let original = book_dir.join("existing.fb2");
+    fs::write(&original, b"existing book content must be preserved").unwrap();
+    let external = dir.path().join("existing.fb2");
+    fs::write(&external, b"new book content must not overwrite").unwrap();
+    assert!(shell.book_library.import_book_and_create_page(
+        &vault, ws_id, &external
+    ).is_err());
+    assert_eq!(
+        fs::read(&original).unwrap(),
+        b"existing book content must be preserved"
+    );
+}
