@@ -205,8 +205,20 @@ impl NativeApp {
                 self.editor_pointer_move(pos, modifiers.shift, true);
             }
             HitboxTarget::TabSelect(tab_id) => {
-                if let Some(window) = &mut self.window {
-                    window.shell_mut().tabs.activate_tab(tab_id);
+                // NativeTabManager does not expose activate_tab(); reopening an
+                // existing document with in_new_tab=true reuses and activates it.
+                let relative_path = self.window.as_ref().and_then(|window| {
+                    window.shell().tabs.tabs().iter()
+                        .find(|tab| tab.tab_id == tab_id)
+                        .and_then(|tab| tab.relative_path.clone())
+                });
+                if let Some(relative_path) = relative_path {
+                    self.dispatch(GpuiWindowAction::OpenNote {
+                        relative_path,
+                        in_new_tab: true,
+                    });
+                } else {
+                    self.dispatch(GpuiWindowAction::OpenGraphTab);
                 }
             }
             HitboxTarget::TabClose(tab_id) => {
@@ -330,7 +342,7 @@ impl NativeApp {
                 painter.rect_stroke(
                     rect,
                     quad.corner_radius_px,
-                    egui::Stroke::new(1.0, rgb(border)),
+                    egui::Stroke::new(1.0_f32, rgb(border)),
                 );
             }
         }
