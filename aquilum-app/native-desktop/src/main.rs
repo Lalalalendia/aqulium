@@ -236,9 +236,9 @@ impl NativeApp {
             HitboxTarget::NavBack => self.dispatch(GpuiWindowAction::NavigateBack),
             HitboxTarget::NavForward => self.dispatch(GpuiWindowAction::NavigateForward),
             HitboxTarget::OpenGraphTab => self.dispatch(GpuiWindowAction::OpenGraphTab),
-            HitboxTarget::SidebarItem(relative_path) => {
-                self.dispatch(GpuiWindowAction::OpenNote {
-                    relative_path,
+            HitboxTarget::SidebarItem(file_id) => {
+                self.dispatch(GpuiWindowAction::ActivateSidebarItem {
+                    file_id,
                     in_new_tab: false,
                 });
             }

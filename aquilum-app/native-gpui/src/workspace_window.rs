@@ -1,6 +1,6 @@
 use crate::editor_view::{GpuiEditorAction, GpuiFrameState, GpuiImeBridge, GpuiRopeEditorView};
 use aquilum_core::app_core::Core;
-use aquilum_core::files::models::FileItem;
+use aquilum_core::files::models::{FileItem, FileItemType};
 use aquilum_core::history::service::HistoryPage;
 use aquilum_core::native_editor::{ColumnAlignment, EvaluatedDataviewBlock, KeyCommand};
 use aquilum_core::native_shell::{
@@ -11,7 +11,8 @@ use aquilum_core::search::models::{NoteSuggestion, SearchResponse};
 use aquilum_core::settings::models::AppConfig;
 use aquilum_core::ui_state::models::TabKind;
 use std::ops::Range;
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -84,6 +85,8 @@ pub struct GpuiWindowLayoutFrame {
 #[derive(Clone, Debug)]
 pub enum GpuiWindowAction {
     OpenNote { relative_path: String, in_new_tab: bool },
+    /// The explorer uses filesystem-backed FileItem IDs, not note-relative paths.
+    ActivateSidebarItem { file_id: String, in_new_tab: bool },
     CreateNote { relative_path: String, content: String },
     CreateNoteFromTemplate { template_name: String, target_rel_path: String, date_iso: String },
     RenameNote { from_rel: String, to_rel: String },
@@ -161,6 +164,53 @@ impl GpuiWorkspaceWindow {
 
     pub fn dispatch(&mut self, action: GpuiWindowAction) -> Result<(), String> {
         match action {
+            GpuiWindowAction::ActivateSidebarItem { file_id, in_new_tab } => {
+                // Never interpret arbitrary absolute FileItem IDs as note-relative
+                // paths. Convert and validate the selected item first.
+                let root = self.shell.workspace_root();
+                let target = Path::new(&file_id);
+                let rel = target.strip_prefix(root)
+                    .map_err(|_| "sidebar item is outside workspace".to_owned())?;
+                if rel.as_os_str().is_empty()
+                    || rel.components().any(|c| !matches!(c, Component::Normal(_)))
+                {
+                    return Err("invalid sidebar item path".to_owned());
+                }
+                let metadata = fs::symlink_metadata(target)
+                    .map_err(|e| format!("sidebar item unavailable: {e}"))?;
+                if metadata.file_type().is_symlink() {
+                    return Err("sidebar symlinks are unsupported".to_owned());
+                }
+                let root_real = fs::canonicalize(root)
+                    .map_err(|e| format!("workspace root unavailable: {e}"))?;
+                let target_real = fs::canonicalize(target)
+                    .map_err(|e| format!("sidebar item unavailable: {e}"))?;
+                if !target_real.starts_with(root_real) {
+                    return Err("sidebar item resolves outside workspace".to_owned());
+                }
+                if metadata.is_dir() {
+                    self.shell.explorer.toggle_folder(&file_id);
+                } else if metadata.is_file() {
+                    let relative_path = rel.to_string_lossy().replace('\\', "/");
+                    let ext = target.extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    match ext.as_str() {
+                        "md" => {
+                            self.active_book_rel = None;
+                            self.shell.open_note(&relative_path, in_new_tab)?;
+                        }
+                        "fb2" | "epub" | "mobi" | "azw3" => {
+                            self.shell.open_book(&relative_path, None)?;
+                            self.active_book_rel = Some(relative_path);
+                        }
+                        _ => return Err(format!("unsupported sidebar file type: .{ext}")),
+                    }
+                } else {
+                    return Err("sidebar entry is not a file or directory".to_owned());
+                }
+            }
             GpuiWindowAction::OpenNote { relative_path, in_new_tab } => {
                 self.active_book_rel = None;
                 self.shell.open_note(&relative_path, in_new_tab)?;
@@ -384,10 +434,40 @@ impl GpuiWorkspaceWindow {
         Ok(())
     }
 
+    /// Build only expanded explorer subtrees. A fixed budget prevents a large
+    /// vault from recursively enumerating its entire filesystem each frame.
+    fn collect_sidebar_files_at(&self, dir: &Path, depth: usize, remaining: &mut usize, out: &mut Vec<FileItem>) {
+        if depth > 8 || *remaining == 0 {
+            return;
+        }
+        let Ok(items) = self.shell.explorer.list_directory(dir) else { return; };
+        for item in items {
+            if *remaining == 0 { break; }
+            let nested = if item.item_type == FileItemType::Folder
+                && self.shell.explorer.is_expanded(&item.id) {
+                Some(item.id.clone())
+            } else {
+                None
+            };
+            out.push(item);
+            *remaining -= 1;
+            if let Some(folder_id) = nested {
+                let folder = Path::new(&folder_id);
+                if fs::symlink_metadata(folder)
+                    .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+                {
+                    self.collect_sidebar_files_at(folder, depth + 1, remaining, out);
+                }
+            }
+        }
+    }
+
     /// Renders a complete, self-contained layout snapshot for GPUI's `Render::render` pass.
     pub fn render_window_frame(&self) -> GpuiWindowLayoutFrame {
         let cfg: AppConfig = self.shell.settings.config();
-        let root_files = self.shell.explorer.list_root().unwrap_or_default();
+        let mut root_files = Vec::new();
+        let mut remaining = 300;
+        self.collect_sidebar_files_at(self.shell.workspace_root(), 0, &mut remaining, &mut root_files);
         let tabs = self.shell.tabs.tabs().to_vec();
         let active_tab_id = self.shell.tabs.active_tab_id();
 
@@ -533,6 +613,50 @@ mod tests {
         fn emit(&self, event: CoreEvent) {
             self.0.lock().unwrap().push(event);
         }
+    }
+
+    #[test]
+    fn native_sidebar_expands_nested_folder_and_uses_relative_note_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let vault = dir.path().join("vault");
+        let nested = vault.join("Чтение");
+        fs::create_dir_all(&nested).unwrap();
+        let note = nested.join("Пример.md");
+        fs::write(&note, "# Тест заметки\n").unwrap();
+        let outside = dir.path().join("outside.md");
+        fs::write(&outside, "must not open outside the vault").unwrap();
+        let sink = Arc::new(WinSink::default());
+        let core = Core::open(&data, Arc::clone(&sink) as Arc<dyn EventSink>);
+        let mut window = GpuiWorkspaceWindow::open(core, &vault, "sidebar-test", 1_000).unwrap();
+
+        let root = window.render_window_frame();
+        assert_eq!(root.root_files.len(), 1);
+        let folder_id = root.root_files[0].id.clone();
+        assert_eq!(root.root_files[0].name, "Чтение");
+        window.dispatch(GpuiWindowAction::ActivateSidebarItem {
+            file_id: folder_id.clone(), in_new_tab: false,
+        }).unwrap();
+        let expanded = window.render_window_frame();
+        assert_eq!(expanded.root_files.len(), 2);
+        assert_eq!(expanded.root_files[1].id, note.to_string_lossy());
+
+        window.dispatch(GpuiWindowAction::ActivateSidebarItem {
+            file_id: expanded.root_files[1].id.clone(), in_new_tab: false,
+        }).unwrap();
+        let active = window.shell().tabs.active_tab().unwrap();
+        assert_eq!(active.relative_path.as_deref(), Some("Чтение/Пример.md"));
+        assert!(window.shell().active_editor().is_some());
+
+        assert!(window.dispatch(GpuiWindowAction::ActivateSidebarItem {
+            file_id: outside.to_string_lossy().into_owned(), in_new_tab: false,
+        }).is_err());
+
+        window.dispatch(GpuiWindowAction::ActivateSidebarItem {
+            file_id: folder_id, in_new_tab: false,
+        }).unwrap();
+        assert_eq!(window.render_window_frame().root_files.len(), 1);
     }
 
     #[test]

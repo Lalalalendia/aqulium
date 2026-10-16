@@ -252,7 +252,26 @@ pub fn build_window_scene(
             corner_radius_px: 0.0,
         });
         let mut row_y = titlebar_h + 12.0 * zoom;
-        for item in &frame.root_files {
+        // The explorer yields absolute filesystem IDs. Indent by the number
+        // of components below the shallowest root item, not by string length.
+        let base_depth = frame.root_files.iter()
+            .map(|item| std::path::Path::new(&item.id).components().count())
+            .min().unwrap_or(0);
+        for (index, item) in frame.root_files.iter().enumerate() {
+            if row_y + 26.0 * zoom >= window_height {
+                break;
+            }
+            let depth = std::path::Path::new(&item.id).components().count()
+                .saturating_sub(base_depth)
+                .min(8);
+            let is_folder = item.item_type == aquilum_core::files::models::FileItemType::Folder;
+            let expanded = is_folder && frame.root_files.get(index + 1)
+                .is_some_and(|next| std::path::Path::new(&next.id).starts_with(&item.id));
+            let label = if is_folder {
+                format!("{} {}", if expanded { "▾" } else { "▸" }, item.name)
+            } else {
+                item.name.clone()
+            };
             let item_rect = RectPx {
                 x: 8.0 * zoom,
                 y: row_y,
@@ -260,12 +279,12 @@ pub fn build_window_scene(
                 height: 26.0 * zoom,
             };
             scene.text_runs.push(SceneTextRun {
-                x: 16.0 * zoom,
+                x: (16.0 + depth as f32 * 14.0) * zoom,
                 y: row_y + 5.0 * zoom,
-                text: item.name.clone(),
+                text: label,
                 font_size_px: 13.0 * zoom,
                 color_rgb: palette.text_primary,
-                bold: false,
+                bold: is_folder,
                 monospace: false,
             });
             scene.hitboxes.push(SceneHitbox {
