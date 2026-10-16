@@ -1,0 +1,16 @@
+[package]
+name = "aquilum-native-desktop"
+version = "0.2.6"
+description = "Experimental real OS window for Aquilum Rust scene (eframe/egui)"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+
+# Intentionally isolated: experimental GUI dependencies must not modify
+# the production Tauri Cargo.lock or make its --locked CI fail.
+[workspace]
+
+[dependencies]
+aquilum-core = { path = "../core" }
+aquilum-native-gpui = { path = "../native-gpui" }
+eframe = { version = "=0.29.1", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
