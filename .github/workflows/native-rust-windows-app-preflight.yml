@@ -1,0 +1,75 @@
+name: Native Rust integration - Windows desktop preflight
+
+on:
+  pull_request:
+    branches:
+      - main
+      - feat/native-rust-optimized-v2-20261015
+    paths:
+      - 'aquilum-app/core/**'
+      - 'aquilum-app/native-gpui/**'
+      - 'aquilum-app/src-tauri/**'
+      - 'aquilum-app/scripts/**'
+      - '.github/workflows/native-rust-windows-app-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-desktop-build:
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: aquilum-app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install reproducible frontend dependencies
+        working-directory: aquilum-app
+        run: npm ci --no-audit --no-fund
+      - name: Verify frontend source and build
+        working-directory: aquilum-app
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        shell: pwsh
+      - name: Compile and link full Windows Tauri application against native Rust changes
+        working-directory: aquilum-app
+        shell: pwsh
+        run: |
+          npx tauri build --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Get-ChildItem -Path "src-tauri/target/release" -Filter "aquilum-app.exe" -Recurse -File |
+            Select-Object -First 1
+          if (!$exe) { throw "No Windows desktop executable was produced" }
+          "AQUILUM_WINDOWS_TAURI_PREFLIGHT_BUILT $($exe.FullName)"
+          "AQUILUM_WINDOWS_TAURI_PREFLIGHT_SHA256 $((Get-FileHash $exe.FullName -Algorithm SHA256).Hash)"
+      - name: Make Rust native model and cutover smoke explicit
+        shell: pwsh
+        run: |
+          cargo run --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui -- --verify-model-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Cargo run maps a non-zero binary exit into its own status (1/101).
+          # Inspect the actual executable's status instead.
+          cargo build --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeExe = Join-Path (Resolve-Path 'aquilum-app/src-tauri/target/debug').Path 'aquilum-native-gpui.exe'
+          if (!(Test-Path $nativeExe)) { throw "Native model executable missing: $nativeExe" }
+          # PowerShell Actions shells can promote any non-zero native exit
+          # into a terminating error before $LASTEXITCODE can be inspected.
+          # Start-Process exposes the actual child status without doing that.
+          $check = Start-Process -FilePath $nativeExe -ArgumentList '--verify-cutover' -NoNewWindow -PassThru -Wait
+          if ($check.ExitCode -ne 2) { throw "Cutover must fail closed with binary exit 2 (got $($check.ExitCode))" }
+      - name: Upload Windows preflight executable for internal inspection
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-tauri-native-model-windows-preflight
+          path: aquilum-app/src-tauri/target/release/aquilum-app.exe
+          if-no-files-found: error
