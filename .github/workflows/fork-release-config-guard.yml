@@ -1,0 +1,59 @@
+name: Fork Release Origin Guard
+
+on:
+  pull_request:
+    paths:
+      - 'aquilum-app/src-tauri/tauri.conf.json'
+      - 'aquilum-app/scripts/build-release.mjs'
+      - 'aquilum-app/scripts/tauri.mjs'
+      - 'scripts/install.sh'
+      - '.github/workflows/fork-release-config-guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'aquilum-app/src-tauri/tauri.conf.json'
+      - 'aquilum-app/scripts/build-release.mjs'
+      - 'aquilum-app/scripts/tauri.mjs'
+      - 'scripts/install.sh'
+      - '.github/workflows/fork-release-config-guard.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-fork-release-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check Node and shell syntax
+        run: |
+          node --check aquilum-app/scripts/tauri.mjs
+          node --check aquilum-app/scripts/build-release.mjs
+          bash -n scripts/install.sh
+      - name: Ensure upstream auto-update cannot activate implicitly
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const cfg = JSON.parse(fs.readFileSync('aquilum-app/src-tauri/tauri.conf.json', 'utf8'));
+          assert.equal(cfg.plugins.updater.active, false, 'updater must be disabled by default');
+          assert.equal(cfg.bundle.createUpdaterArtifacts, false, 'unsigned release build must not make updater artifacts');
+          assert.deepEqual(
+            cfg.plugins.updater.endpoints,
+            ['https://github.com/Lalalalendia/aqulium/releases/latest/download/latest.json'],
+            'updater endpoint must be owned by the fork',
+          );
+          const tauri = fs.readFileSync('aquilum-app/scripts/tauri.mjs', 'utf8');
+          const release = fs.readFileSync('aquilum-app/scripts/build-release.mjs', 'utf8');
+          const installer = fs.readFileSync('scripts/install.sh', 'utf8');
+          assert.ok(tauri.includes("process.env.AQUILUM_ENABLE_UPDATER === '1'"));
+          assert.ok(release.includes("'Lalalalendia/aqulium'"));
+          assert.ok(installer.includes('Lalalalendia/aqulium'));
+          for (const source of [tauri, release, installer]) {
+            assert.ok(!source.includes('Freaction/Aquilum'), 'release script must not refer to upstream');
+          }
+          JS
