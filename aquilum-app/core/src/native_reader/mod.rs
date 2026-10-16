@@ -3,6 +3,7 @@
 //! persistence, and bidirectional `> [!quote]` + `aquilum-reader:` quote links.
 
 pub mod library;
+pub mod mobi_azw3;
 pub use library::{BookLibraryController, BookLibraryEntry, CoverPatternKind};
 use crate::app_core::Core;
 use crate::ui_state::models::SaveReaderStateInput;
@@ -15,6 +16,8 @@ use uuid::Uuid;
 pub enum BookFormat {
     Fb2,
     Epub,
+    Mobi,
+    Azw3,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -79,13 +82,19 @@ impl NativeBookReader {
         if ext == "epub" {
             return Err("Native EPUB ZIP parsing is not implemented yet; use the existing book renderer".to_owned());
         }
-        let raw = fs::read_to_string(book_path).map_err(|e| format!("failed to read book: {e}"))?;
-        let book = if ext == "fb2" || raw.contains("<FictionBook") {
-            parse_fb2_document(book_path, &relative_path, &raw)
-        } else if ext == "epub" || raw.contains("<html") || raw.contains("<body") {
-            parse_xhtml_epub_document(book_path, &relative_path, &raw)
+        let book = if ext == "mobi" || ext == "azw3" {
+            let bytes = fs::read(book_path).map_err(|e| format!("failed to read book: {e}"))?;
+            let format = if ext == "mobi" { BookFormat::Mobi } else { BookFormat::Azw3 };
+            mobi_azw3::parse_mobi_or_azw3_bytes(book_path, &relative_path, &bytes, format)?
         } else {
-            return Err(format!("unsupported book format: {ext}"));
+            let raw = fs::read_to_string(book_path).map_err(|e| format!("failed to read book: {e}"))?;
+            if ext == "fb2" || raw.contains("<FictionBook") {
+                parse_fb2_document(book_path, &relative_path, &raw)
+            } else if ext == "epub" || raw.contains("<html") || raw.contains("<body") {
+                parse_xhtml_epub_document(book_path, &relative_path, &raw)
+            } else {
+                return Err(format!("unsupported book format: {ext}"));
+            }
         };
 
         let mut reader = Self {
