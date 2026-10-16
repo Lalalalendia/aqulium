@@ -32,6 +32,9 @@ jobs:
         run: |
           set -euo pipefail
           command -v xvfb-run
+          # Github runner has Xvfb but does not preload xkbcommon's X11 shim.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libxkbcommon-x11-0
           vault="$(mktemp -d)"
           trap 'rm -rf "$vault"' EXIT
           printf '# Native Smoke\nTest document.\n' > "$vault/Smoke.md"
