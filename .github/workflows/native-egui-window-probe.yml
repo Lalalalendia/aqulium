@@ -26,6 +26,17 @@ jobs:
       - name: Test native input event routing
         run: cargo test --manifest-path aquilum-app/native-desktop/Cargo.toml -- --test-threads=1
 
+      - name: Launch and paint an actual Linux OS window in Xvfb
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xvfb-run
+          vault="$(mktemp -d)"
+          trap 'rm -rf "$vault"' EXIT
+          printf '# Native Smoke\nTest document.\n' > "$vault/Smoke.md"
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a timeout 120s cargo run             --manifest-path aquilum-app/native-desktop/Cargo.toml             -- "$vault/Smoke.md" --app-data "$vault/app-data" --smoke-launch             2>&1 | tee native-os-window-smoke.log
+          grep -q 'AQUILUM_NATIVE_OS_WINDOW_SMOKE frames=' native-os-window-smoke.log
       - name: Preserve resolved prototype dependency lock for review
         if: always()
         uses: actions/upload-artifact@v4
