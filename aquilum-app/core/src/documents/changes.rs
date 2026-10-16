@@ -15,6 +15,10 @@ fn invalid(message: &str) -> ChangeError {
     ChangeError(message.to_owned())
 }
 
+pub fn invalid_edit_range() -> ChangeError {
+    invalid("edit range is out of bounds or unsorted")
+}
+
 fn section_len(value: &Value) -> Result<usize, ChangeError> {
     value.as_u64().map(|length| length as usize).ok_or_else(|| invalid("section length is not a number"))
 }

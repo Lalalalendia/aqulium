@@ -82,9 +82,11 @@ version = "0.2.6"
 dependencies = [
  "atomic-write-file",
  "blake3",
+ "flate2",
  "httparse",
  "notify",
  "pulldown-cmark",
+ "quick-xml",
  "rusqlite",
  "rust-stemmers",
  "serde",
@@ -96,6 +98,18 @@ dependencies = [
  "uuid",
  "walkdir",
  "yrs",
+ "zip",
+]
+
+[[package]]
+name = "aquilum-native-gpui"
+version = "0.2.6"
+dependencies = [
+ "aquilum-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -6389,6 +6403,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
 ]

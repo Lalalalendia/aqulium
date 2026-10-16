@@ -1,0 +1,508 @@
+//! Pure-Rust GPUI Scene Graph & Primitive Layout Engine (`GpuiSceneGraph`).
+
+use crate::workspace_window::{
+    GpuiActiveCenterSurface, GpuiModalOverlay, GpuiSidebarMode, GpuiWindowLayoutFrame,
+};
+use aquilum_core::native_editor::MarkdownTokenKind;
+use aquilum_core::native_shell::{ThemePalette, UiScaleState};
+use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RectPx {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl RectPx {
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneQuad {
+    pub bounds: RectPx,
+    pub bg_rgb: (u8, u8, u8),
+    pub border_rgb: Option<(u8, u8, u8)>,
+    pub corner_radius_px: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneTextRun {
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    pub font_size_px: f32,
+    pub color_rgb: (u8, u8, u8),
+    pub bold: bool,
+    pub monospace: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneLine {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub stroke_width_px: f32,
+    pub color_rgb: (u8, u8, u8),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HitboxTarget {
+    TabSelect(Uuid),
+    TabClose(Uuid),
+    NavBack,
+    NavForward,
+    OpenGraphTab,
+    SidebarItem(String),
+    EditorSurface,
+    GraphNode(u32),
+    ModalDismiss,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneHitbox {
+    pub bounds: RectPx,
+    pub target: HitboxTarget,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GpuiSceneGraph {
+    pub quads: Vec<SceneQuad>,
+    pub lines: Vec<SceneLine>,
+    pub text_runs: Vec<SceneTextRun>,
+    pub hitboxes: Vec<SceneHitbox>,
+}
+
+impl GpuiSceneGraph {
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<&HitboxTarget> {
+        self.hitboxes
+            .iter()
+            .rev()
+            .find(|h| h.bounds.contains(x, y))
+            .map(|h| &h.target)
+    }
+}
+
+/// Paint the selection behind glyphs and a visible caret in the scene.
+/// Coordinates are approximate until the native text shaping engine exports
+/// per-grapheme advances; selection positions use Unicode scalar offsets.
+fn push_editor_caret_and_selection(
+    scene: &mut GpuiSceneGraph,
+    text: &str,
+    caret: Option<usize>,
+    selection: Option<(usize, usize)>,
+    text_x: f32,
+    text_y: f32,
+    line_h: f32,
+    char_advance: f32,
+    max_visible_lines: usize,
+    accent: (u8, u8, u8),
+    background: (u8, u8, u8),
+) {
+    let highlight = (
+        ((u16::from(accent.0) + 3 * u16::from(background.0)) / 4) as u8,
+        ((u16::from(accent.1) + 3 * u16::from(background.1)) / 4) as u8,
+        ((u16::from(accent.2) + 3 * u16::from(background.2)) / 4) as u8,
+    );
+    let mut line_start = 0usize;
+    // split('\n') includes the final empty line, unlike str::lines().
+    for (index, line) in text.split('\n').enumerate().take(max_visible_lines) {
+        let n = line.chars().count();
+        let line_end = line_start.saturating_add(n);
+        let top = text_y + index as f32 * line_h;
+
+        if let Some((start, end)) = selection {
+            let visible_start = start.max(line_start);
+            let visible_end = end.min(line_end);
+            if visible_start < visible_end {
+                scene.quads.push(SceneQuad {
+                    bounds: RectPx {
+                        x: text_x + (visible_start - line_start) as f32 * char_advance,
+                        y: top,
+                        width: (visible_end - visible_start) as f32 * char_advance,
+                        height: line_h,
+                    },
+                    bg_rgb: highlight,
+                    border_rgb: None,
+                    corner_radius_px: 0.0,
+                });
+            }
+        }
+
+        if let Some(position) = caret {
+            if (line_start..=line_end).contains(&position) {
+                let x = text_x + (position - line_start) as f32 * char_advance;
+                scene.lines.push(SceneLine {
+                    x1: x,
+                    y1: top,
+                    x2: x,
+                    y2: top + line_h,
+                    stroke_width_px: 1.5,
+                    color_rgb: accent,
+                });
+            }
+        }
+        // Each split component except the last is terminated by one Unicode
+        // newline character, which occupies one editor-char offset.
+        line_start = line_end.saturating_add(1);
+    }
+}
+
+pub fn build_window_scene(
+    frame: &GpuiWindowLayoutFrame,
+    palette: ThemePalette,
+    scale_state: UiScaleState,
+    window_width: f32,
+    window_height: f32,
+) -> GpuiSceneGraph {
+    let mut scene = GpuiSceneGraph::default();
+    let zoom = scale_state.scale.clamp(0.5, 2.0);
+    let titlebar_h = 38.0 * zoom;
+    let sidebar_w = if scale_state.focus_mode || frame.sidebar_mode == GpuiSidebarMode::Hidden {
+        0.0
+    } else {
+        240.0 * zoom
+    };
+    let inspector_w = if scale_state.focus_mode
+        || frame.inspector_mode == crate::workspace_window::GpuiInspectorMode::Hidden
+    {
+        0.0
+    } else {
+        260.0 * zoom
+    };
+
+    scene.quads.push(SceneQuad {
+        bounds: RectPx {
+            x: 0.0,
+            y: 0.0,
+            width: window_width,
+            height: window_height,
+        },
+        bg_rgb: palette.bg_primary,
+        border_rgb: None,
+        corner_radius_px: 0.0,
+    });
+
+    scene.quads.push(SceneQuad {
+        bounds: RectPx {
+            x: 0.0,
+            y: 0.0,
+            width: window_width,
+            height: titlebar_h,
+        },
+        bg_rgb: palette.bg_secondary,
+        border_rgb: Some(palette.border_subtle),
+        corner_radius_px: 0.0,
+    });
+
+    let mut tab_x = 88.0 * zoom;
+    let tab_w = 160.0 * zoom;
+    for tab in &frame.tabs {
+        let is_active = frame.active_tab_id == Some(tab.tab_id);
+        let tab_rect = RectPx {
+            x: tab_x,
+            y: 4.0 * zoom,
+            width: tab_w,
+            height: titlebar_h - 4.0 * zoom,
+        };
+        scene.quads.push(SceneQuad {
+            bounds: tab_rect,
+            bg_rgb: if is_active {
+                palette.bg_primary
+            } else {
+                palette.bg_secondary
+            },
+            border_rgb: Some(palette.border_subtle),
+            corner_radius_px: 6.0,
+        });
+        scene.text_runs.push(SceneTextRun {
+            x: tab_x + 12.0 * zoom,
+            y: 11.0 * zoom,
+            text: tab.title.clone(),
+            font_size_px: 13.0 * zoom,
+            color_rgb: if is_active {
+                palette.text_primary
+            } else {
+                palette.text_muted
+            },
+            bold: is_active,
+            monospace: false,
+        });
+        scene.hitboxes.push(SceneHitbox {
+            bounds: tab_rect,
+            target: HitboxTarget::TabSelect(tab.tab_id),
+        });
+        tab_x += tab_w + 4.0 * zoom;
+    }
+
+    if sidebar_w > 0.0 {
+        scene.quads.push(SceneQuad {
+            bounds: RectPx {
+                x: 0.0,
+                y: titlebar_h,
+                width: sidebar_w,
+                height: window_height - titlebar_h,
+            },
+            bg_rgb: palette.bg_secondary,
+            border_rgb: Some(palette.border_subtle),
+            corner_radius_px: 0.0,
+        });
+        let mut row_y = titlebar_h + 12.0 * zoom;
+        // The explorer yields absolute filesystem IDs. Indent by the number
+        // of components below the shallowest root item, not by string length.
+        let base_depth = frame.root_files.iter()
+            .map(|item| std::path::Path::new(&item.id).components().count())
+            .min().unwrap_or(0);
+        for (index, item) in frame.root_files.iter().enumerate() {
+            if row_y + 26.0 * zoom >= window_height {
+                break;
+            }
+            let depth = std::path::Path::new(&item.id).components().count()
+                .saturating_sub(base_depth)
+                .min(8);
+            let is_folder = item.item_type == aquilum_core::files::models::FileItemType::Folder;
+            let expanded = is_folder && frame.root_files.get(index + 1)
+                .is_some_and(|next| std::path::Path::new(&next.id).starts_with(&item.id));
+            let label = if is_folder {
+                format!("{} {}", if expanded { "▾" } else { "▸" }, item.name)
+            } else {
+                item.name.clone()
+            };
+            let item_rect = RectPx {
+                x: 8.0 * zoom,
+                y: row_y,
+                width: sidebar_w - 16.0 * zoom,
+                height: 26.0 * zoom,
+            };
+            scene.text_runs.push(SceneTextRun {
+                x: (16.0 + depth as f32 * 14.0) * zoom,
+                y: row_y + 5.0 * zoom,
+                text: label,
+                font_size_px: 13.0 * zoom,
+                color_rgb: palette.text_primary,
+                bold: is_folder,
+                monospace: false,
+            });
+            scene.hitboxes.push(SceneHitbox {
+                bounds: item_rect,
+                target: HitboxTarget::SidebarItem(item.id.clone()),
+            });
+            row_y += 28.0 * zoom;
+        }
+    }
+
+    let center_rect = RectPx {
+        x: sidebar_w,
+        y: titlebar_h,
+        width: (window_width - sidebar_w - inspector_w).max(100.0),
+        height: (window_height - titlebar_h).max(100.0),
+    };
+    scene.hitboxes.push(SceneHitbox {
+        bounds: center_rect,
+        target: HitboxTarget::EditorSurface,
+    });
+
+    match &frame.center {
+        GpuiActiveCenterSurface::Editor { frame: ed_frame, .. } => {
+            let line_h = 24.0 * zoom;
+            let text_x = center_rect.x + 48.0 * zoom;
+            let mut text_y = center_rect.y + 20.0 * zoom;
+            let max_visible_lines = ((center_rect.height / line_h) as usize).max(1);
+            if frame.modal == GpuiModalOverlay::None {
+                push_editor_caret_and_selection(
+                    &mut scene,
+                    &ed_frame.viewport.text,
+                    ed_frame.viewport.selection.caret_char_in_viewport,
+                    ed_frame.viewport.selection.visible_range_chars,
+                    text_x,
+                    text_y,
+                    line_h,
+                    15.0 * zoom * 0.55,
+                    max_visible_lines,
+                    palette.accent_rgb,
+                    palette.bg_primary,
+                );
+            }
+            for (idx, line) in ed_frame.viewport.text.split('\n').take(max_visible_lines).enumerate() {
+                let doc_line_num = ed_frame.viewport.start_line + idx + 1;
+                scene.text_runs.push(SceneTextRun {
+                    x: center_rect.x + 12.0 * zoom,
+                    y: text_y,
+                    text: doc_line_num.to_string(),
+                    font_size_px: 12.0 * zoom,
+                    color_rgb: palette.text_muted,
+                    bold: false,
+                    monospace: true,
+                });
+                let is_heading = ed_frame
+                    .viewport
+                    .markdown_spans
+                    .iter()
+                    .any(|s| matches!(s.kind, MarkdownTokenKind::Heading(_)));
+                scene.text_runs.push(SceneTextRun {
+                    x: text_x,
+                    y: text_y,
+                    text: line.to_owned(),
+                    font_size_px: 15.0 * zoom,
+                    color_rgb: palette.text_primary,
+                    bold: is_heading && line.starts_with('#'),
+                    monospace: false,
+                });
+                text_y += line_h;
+            }
+        }
+        GpuiActiveCenterSurface::Graph { nodes, edges, .. } => {
+            for edge in edges {
+                if let (Some((_, (x1, y1))), Some((_, (x2, y2)))) =
+                    (nodes.get(edge.source as usize), nodes.get(edge.target as usize))
+                {
+                    scene.lines.push(SceneLine {
+                        x1: center_rect.x + *x1,
+                        y1: center_rect.y + *y1,
+                        x2: center_rect.x + *x2,
+                        y2: center_rect.y + *y2,
+                        stroke_width_px: 1.0,
+                        color_rgb: palette.border_subtle,
+                    });
+                }
+            }
+            for (node, (sx, sy)) in nodes {
+                let r = 6.0 * zoom;
+                let node_rect = RectPx {
+                    x: center_rect.x + *sx - r,
+                    y: center_rect.y + *sy - r,
+                    width: r * 2.0,
+                    height: r * 2.0,
+                };
+                scene.quads.push(SceneQuad {
+                    bounds: node_rect,
+                    bg_rgb: node.color_rgb,
+                    border_rgb: None,
+                    corner_radius_px: r,
+                });
+                scene.hitboxes.push(SceneHitbox {
+                    bounds: node_rect,
+                    target: HitboxTarget::GraphNode(node.index),
+                });
+            }
+        }
+        GpuiActiveCenterSurface::Reader {
+            book_title,
+            chapter_title,
+            visible_paragraphs,
+            ..
+        } => {
+            let mut py = center_rect.y + 24.0 * zoom;
+            scene.text_runs.push(SceneTextRun {
+                x: center_rect.x + 48.0 * zoom,
+                y: py,
+                text: format!("{book_title} — {chapter_title}"),
+                font_size_px: 18.0 * zoom,
+                color_rgb: palette.text_primary,
+                bold: true,
+                monospace: false,
+            });
+            py += 32.0 * zoom;
+            for para in visible_paragraphs {
+                scene.text_runs.push(SceneTextRun {
+                    x: center_rect.x + 48.0 * zoom,
+                    y: py,
+                    text: para.clone(),
+                    font_size_px: 16.0 * zoom,
+                    color_rgb: palette.text_primary,
+                    bold: false,
+                    monospace: false,
+                });
+                py += 28.0 * zoom;
+            }
+        }
+        GpuiActiveCenterSurface::EmptyState => {}
+    }
+
+    if frame.modal != GpuiModalOverlay::None {
+        let modal_rect = RectPx {
+            x: window_width * 0.25,
+            y: window_height * 0.15,
+            width: window_width * 0.5,
+            height: window_height * 0.6,
+        };
+        scene.quads.push(SceneQuad {
+            bounds: modal_rect,
+            bg_rgb: palette.bg_elevated,
+            border_rgb: Some(palette.accent_rgb),
+            corner_radius_px: 12.0,
+        });
+        scene.hitboxes.push(SceneHitbox {
+            bounds: modal_rect,
+            target: HitboxTarget::ModalDismiss,
+        });
+    }
+
+    scene
+}
+
+
+#[cfg(test)]
+mod native_cursor_tests {
+    use super::*;
+
+    fn annotated_scene(
+        text: &str,
+        caret: Option<usize>,
+        range: Option<(usize, usize)>,
+    ) -> GpuiSceneGraph {
+        let mut scene = GpuiSceneGraph::default();
+        push_editor_caret_and_selection(
+            &mut scene,
+            text,
+            caret,
+            range,
+            100.0,
+            20.0,
+            24.0,
+            10.0,
+            8,
+            (255, 100, 0),
+            (0, 0, 0),
+        );
+        scene
+    }
+
+    #[test]
+    fn native_caret_on_empty_and_trailing_newline_is_visible() {
+        let empty = annotated_scene("", Some(0), None);
+        assert_eq!(empty.lines.len(), 1);
+        assert_eq!(empty.lines[0].x1, 100.0);
+        assert_eq!(empty.lines[0].y1, 20.0);
+
+        let trailing = annotated_scene("Первая\n", Some(7), None);
+        assert_eq!(trailing.lines.len(), 1);
+        assert_eq!(trailing.lines[0].x1, 100.0);
+        assert_eq!(trailing.lines[0].y1, 44.0);
+    }
+
+    #[test]
+    fn native_selection_handles_unicode_and_two_lines() {
+        // Unicode scalars, not UTF-8 byte offsets; includes Cyrillic and emoji.
+        let scene = annotated_scene("Ж🙂Т\nМир", Some(5), Some((1, 6)));
+        assert_eq!(scene.quads.len(), 2);
+        assert_eq!(scene.quads[0].bounds.x, 110.0);
+        assert_eq!(scene.quads[0].bounds.width, 20.0);
+        assert_eq!(scene.quads[1].bounds.x, 100.0);
+        assert_eq!(scene.quads[1].bounds.width, 20.0);
+        assert_eq!(scene.lines.len(), 1);
+        assert_eq!(scene.lines[0].x1, 110.0);
+        assert_eq!(scene.lines[0].y1, 44.0);
+    }
+
+    #[test]
+    fn native_selection_does_not_draw_offscreen_caret() {
+        let scene = annotated_scene("abc", Some(100), Some((100, 110)));
+        assert!(scene.quads.is_empty());
+        assert!(scene.lines.is_empty());
+    }
+}

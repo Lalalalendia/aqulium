@@ -1,0 +1,20 @@
+[package]
+name = "aquilum-native-gpui"
+version = "0.2.6"
+description = "Experimental headless Rust workspace, Rope editor and scene model"
+authors = ["Dmitriy Chaplinskiy"]
+license = "AGPL-3.0-only"
+edition = "2021"
+workspace = "../src-tauri"
+
+[dependencies]
+aquilum-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1.23.5", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# This crate models the window and scene tree but does NOT initialize a GPUI OS window.
+# Do not market it as a GUI replacement until a real platform renderer exists.

@@ -1,0 +1,86 @@
+name: Native Aquilum X11 Keyboard Save E2E
+
+on:
+  pull_request:
+    paths:
+      - 'aquilum-app/native-desktop/**'
+      - '.github/workflows/native-desktop-x11-input-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keyboard-save-x11:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install virtual display and XTest keyboard tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb xdotool scrot libxkbcommon-x11-0
+      - name: Open real window, type with XTest, save and inspect disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          vault="$(mktemp -d)"
+          trap 'if [ -f "$vault/window.log" ]; then cp "$vault/window.log" native-desktop-x11-e2e.log; fi; if [ -f "$vault/native-window.png" ]; then cp "$vault/native-window.png" native-desktop-x11-e2e.png; fi; rm -rf "$vault"' EXIT
+          printf '# Physical keyboard smoke\n' > "$vault/Entry.md"
+          export VAULT="$vault"
+          export LIBGL_ALWAYS_SOFTWARE=1
+          xvfb-run -a timeout 300s bash -c '
+            set -euo pipefail
+            RUST_BACKTRACE=1 cargo run --manifest-path aquilum-app/native-desktop/Cargo.toml \
+              -- "$VAULT/Entry.md" --app-data "$VAULT/app-data" > "$VAULT/window.log" 2>&1 &
+            app_pid=$!
+            trap "kill $app_pid 2>/dev/null || true" EXIT
+            window_id=""
+            for attempt in $(seq 1 90); do
+              window_id="$(xdotool search --onlyvisible --name "Aquilum Native" | head -n 1 || true)"
+              if [ -n "$window_id" ]; then break; fi
+              if ! kill -0 "$app_pid" 2>/dev/null; then
+                cat "$VAULT/window.log"
+                echo "GUI terminated before opening an X11 window" >&2
+                exit 1
+              fi
+              sleep 1
+            done
+            if [ -z "$window_id" ]; then
+              cat "$VAULT/window.log"
+              echo "Native Aquilum window not found in X11" >&2
+              exit 1
+            fi
+            xdotool windowfocus --sync "$window_id"
+            xdotool type --clearmodifiers --delay 35 "NATIVE_KEYBOARD_SAVE_SENTINEL"
+            xdotool key --clearmodifiers ctrl+s
+            for attempt in $(seq 1 35); do
+              if grep -q NATIVE_KEYBOARD_SAVE_SENTINEL "$VAULT/Entry.md"; then
+                break
+              fi
+              sleep 0.2
+            done
+            if ! grep -q NATIVE_KEYBOARD_SAVE_SENTINEL "$VAULT/Entry.md"; then
+              echo "Physical text input + Ctrl+S did not persist the sentinel" >&2
+              cat "$VAULT/window.log"
+              exit 1
+            fi
+            echo "AQUILUM_NATIVE_OS_INPUT_SAVE_E2E_PASSED"
+            # Capture a real X11 framebuffer after typing and saving, before exit.
+            sleep 0.5
+            scrot -q 90 "$VAULT/native-window.png"
+            test -s "$VAULT/native-window.png"
+            echo "AQUILUM_NATIVE_OS_VISUAL_CAPTURE_READY"
+            xdotool windowclose "$window_id" || true
+            sleep 1
+          '
+      - name: Preserve window runtime log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-desktop-x11-input-e2e-log
+          path: |
+            native-desktop-x11-e2e.log
+            native-desktop-x11-e2e.png
+          if-no-files-found: warn
