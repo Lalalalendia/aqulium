@@ -10,7 +10,7 @@ const projectRoot = resolve(__dirname, '..');
 const repoRoot = resolve(projectRoot, '..');
 const artifactsRoot = join(repoRoot, '.artifacts');
 const buildRoot = join(artifactsRoot, 'cargo-release');
-const releaseRepo = 'Freaction/Aquilum';
+const releaseRepo = process.env.AQUILUM_RELEASE_REPO || 'Lalalalendia/aqulium';
 
 const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'));
 const version = packageJson.version;

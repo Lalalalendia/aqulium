@@ -19,10 +19,12 @@ if (command === 'build') {
   await setCargoTarget(CARGO_RELEASE);
   execFileSync(process.execPath, ['scripts/sync-version.mjs'], { cwd: projectRoot, stdio: 'inherit' });
 
-  if (args.length === 1) {
-    args.push('--features', 'updater');
-  } else if (!args.includes('--features')) {
-    args.splice(1, 0, '--features', 'updater');
+  if (process.env.AQUILUM_ENABLE_UPDATER === '1') {
+    if (args.length === 1) {
+      args.push('--features', 'updater');
+    } else if (!args.includes('--features')) {
+      args.splice(1, 0, '--features', 'updater');
+    }
   }
 } else {
   await setCargoTarget(CARGO_DEV);
