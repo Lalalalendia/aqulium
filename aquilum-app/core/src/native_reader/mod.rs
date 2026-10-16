@@ -282,8 +282,19 @@ fn parse_fb2_document(path: &Path, relative_path: &str, xml: &str) -> NativeBook
         let chap_title = extract_tag_text(sec_body, "title")
             .unwrap_or_else(|| format!("Глава {}", sec_idx + 1));
 
+        // FB2 chapter headings use <title><p>...</p></title>. Keep the
+        // heading as BookChapter.title, not as a navigable body paragraph.
+        let title_range = sec_body.find("<title").and_then(|start| {
+            sec_body[start..]
+                .find("</title>")
+                .map(|end| start..start + end + "</title>".len())
+        });
         let mut paragraphs = Vec::new();
-        for p_chunk in sec_body.split("<p") {
+        for (p_tag_start, _) in sec_body.match_indices("<p") {
+            if title_range.as_ref().is_some_and(|range| range.contains(&p_tag_start)) {
+                continue;
+            }
+            let p_chunk = &sec_body[p_tag_start + 2..];
             let Some(gt) = p_chunk.find('>') else { continue };
             let Some(end_p) = p_chunk[gt + 1..].find("</p>") else { continue };
             let text = strip_xml_tags(&p_chunk[gt + 1..gt + 1 + end_p]).trim().to_owned();

@@ -233,6 +233,28 @@ fn current_table_cell_coords(rope: &RopeBuffer, selection: Selection, table: &Ma
     (row_offset, col_idx)
 }
 
+/// Restore the logical cell after reformatting a table. A full-table replacement
+/// normally puts the caret at the end of the last row, so the next table action
+/// would silently operate on the wrong column.
+fn restore_table_cell_selection(
+    editor: &mut NativeEditorSession,
+    start_line: usize,
+    row_offset: usize,
+    col_idx: usize,
+) {
+    let target_line = (start_line + row_offset).min(editor.rope().len_lines().saturating_sub(1));
+    let (line_start, line_end, _) = editor.rope().line_char_bounds(target_line);
+    let line = editor.rope().slice_chars(line_start, line_end);
+    // Markdown tables start every cell with '|'. Select just inside the same
+    // logical cell, independent of newly computed column widths.
+    let within_line = line
+        .match_indices('|')
+        .nth(col_idx)
+        .map(|(byte_index, _)| line[..byte_index].chars().count() + 2)
+        .unwrap_or(0);
+    editor.set_selection(Selection::caret((line_start + within_line).min(line_end)));
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InteractiveLinkTarget {
     WikiNote {
@@ -294,7 +316,7 @@ impl NativeEditorSession {
         let Some(mut table) = parse_table_at_line(self.rope(), lc.line) else {
             return Ok(false);
         };
-        let (_, col_idx) = current_table_cell_coords(self.rope(), self.selection(), &table);
+        let (row_offset, col_idx) = current_table_cell_coords(self.rope(), self.selection(), &table);
         let insert_col = (col_idx + 1).min(table.col_count());
         table.headers.insert(insert_col, format!("Col {}", insert_col + 1));
         table.alignments.insert(insert_col, ColumnAlignment::None);
@@ -303,6 +325,7 @@ impl NativeEditorSession {
         }
         let formatted = table.format();
         self.replace_char_range_atomic(table.start_char, table.end_char, &formatted, EditKind::Replace)?;
+        restore_table_cell_selection(self, table.start_line, row_offset, col_idx);
         Ok(true)
     }
 
@@ -332,12 +355,13 @@ impl NativeEditorSession {
         let Some(mut table) = parse_table_at_line(self.rope(), lc.line) else {
             return Ok(false);
         };
-        let (_, col_idx) = current_table_cell_coords(self.rope(), self.selection(), &table);
+        let (row_offset, col_idx) = current_table_cell_coords(self.rope(), self.selection(), &table);
         if let Some(slot) = table.alignments.get_mut(col_idx) {
             *slot = align;
         }
         let formatted = table.format();
         self.replace_char_range_atomic(table.start_char, table.end_char, &formatted, EditKind::Replace)?;
+        restore_table_cell_selection(self, table.start_line, row_offset, col_idx);
         Ok(true)
     }
 
