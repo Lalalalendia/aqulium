@@ -83,15 +83,58 @@ fn package_path(container: &str) -> Result<String, String> {
     }
 }
 
+/// Resolve EPUB URI references to normalized, relative ZIP member names.
+/// OPF hrefs may percent-encode spaces and UTF-8 filenames; ZIP names do not.
 fn resolve_archive_href(opf_path: &str, href: &str) -> Result<String, String> {
-    // Fragments identify locations inside chapters, not ZIP entry names.
-    let relative = href.split('#').next().unwrap_or("");
-    if relative.is_empty() || relative.starts_with('/') || relative.contains('\\') {
+    let reference = href.split(|c| c == '#' || c == '?').next().unwrap_or("");
+    if reference.is_empty()
+        || reference.starts_with('/')
+        || reference.starts_with('\\')
+        || reference.split('/').next().is_some_and(|first| first.contains(':'))
+    {
         return Err(format!("invalid EPUB manifest href: {href}"));
     }
+
+    let input = reference.as_bytes();
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut cursor = 0;
+    while cursor < input.len() {
+        if input[cursor] == b'%' {
+            let hex_digit = |value: u8| -> Option<u8> {
+                match value {
+                    b'0'..=b'9' => Some(value - b'0'),
+                    b'a'..=b'f' => Some(value - b'a' + 10),
+                    b'A'..=b'F' => Some(value - b'A' + 10),
+                    _ => None,
+                }
+            };
+            let hi = input.get(cursor + 1).and_then(|value| hex_digit(*value));
+            let lo = input.get(cursor + 2).and_then(|value| hex_digit(*value));
+            let (Some(hi), Some(lo)) = (hi, lo) else {
+                return Err(format!("malformed EPUB URI escape: {href}"));
+            };
+            let byte = (hi << 4) | lo;
+            // Encoded separators must not silently change path components.
+            if byte == b'/' || byte == b'\\' {
+                return Err(format!("encoded path separator in EPUB URI: {href}"));
+            }
+            decoded.push(byte);
+            cursor += 3;
+        } else {
+            decoded.push(input[cursor]);
+            cursor += 1;
+        }
+    }
+
+    let relative = String::from_utf8(decoded)
+        .map_err(|_| format!("EPUB URI contains invalid UTF-8: {href}"))?;
+    if relative.chars().any(char::is_control) || relative.contains('\\') {
+        return Err(format!("invalid EPUB URI characters: {href}"));
+    }
+
     let prefix = opf_path.rsplit_once('/').map_or("", |(base, _)| base);
     let full = if prefix.is_empty() {
-        relative.to_owned()
+        relative
     } else {
         format!("{prefix}/{relative}")
     };
@@ -106,6 +149,9 @@ fn resolve_archive_href(opf_path: &str, href: &str) -> Result<String, String> {
             }
             item => parts.push(item),
         }
+    }
+    if parts.is_empty() {
+        return Err(format!("empty normalized EPUB href: {href}"));
     }
     Ok(parts.join("/"))
 }
@@ -143,8 +189,14 @@ fn parse_package(xml: &str, opf_path: &str) -> Result<Package, String> {
                         }
                     }
                     b"itemref" => {
-                        if let Some(id) = xml_attribute(tag, b"idref") {
-                            spine.push(id);
+                        // Non-linear auxiliary content (cover, navigation, etc.)
+                        // must not be treated as part of the reader's chapter order.
+                        let non_linear = xml_attribute(tag, b"linear")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("no"));
+                        if !non_linear {
+                            if let Some(id) = xml_attribute(tag, b"idref") {
+                                spine.push(id);
+                            }
                         }
                     }
                     _ => {}
@@ -287,6 +339,9 @@ pub fn parse_epub_zip_bytes(
             .map(str::to_owned)
             .ok_or_else(|| "EPUB contains no OPF package".to_owned())?
     };
+    // The rootfile attribute is also a URI reference: canonicalize it
+    // before looking it up in the ZIP directory.
+    let opf_path = resolve_archive_href("", &opf_path)?;
     let opf_xml = entry_text(&mut archive, &opf_path, &mut consumed)?;
     let package = parse_package(&opf_xml, &opf_path)?;
     let mut chapters = Vec::new();
@@ -377,6 +432,43 @@ mod tests {
         };
         bytes[payload_start + 1] ^= 0x40;
         assert!(parse_epub_zip_bytes(Path::new("bad.epub"), "bad.epub", &bytes).is_err());
+    }
+
+    #[test]
+    fn native_epub_uri_encoded_opf_utf8_chapters_and_non_linear_spine() {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let entries: &[(&str, &str)] = &[
+            ("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OPS%20Root/content.opf"/></rootfiles></container>"#),
+            ("OPS Root/content.opf", r#"<package><metadata><dc:title xmlns:dc="urn:dc">Проверка EPUB</dc:title></metadata><manifest><item id="skip" href="missing.xhtml"/><item id="main" href="text/%D0%B3%D0%BB%D0%B0%D0%B2%D0%B0%201.xhtml"/></manifest><spine><itemref idref="skip" linear="no"/><itemref idref="main"/></spine></package>"#),
+            ("OPS Root/text/глава 1.xhtml", r#"<html><body><h1>Глава первая</h1><p>Привет, мир</p></body></html>"#),
+        ];
+        for (name, content) in entries {
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated);
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let book = parse_epub_zip_bytes(Path::new("encoded.epub"), "Files/encoded.epub", &bytes).unwrap();
+        assert_eq!(book.metadata.title, "Проверка EPUB");
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.total_paragraphs, 1);
+        assert_eq!(book.chapters[0].title, "Глава первая");
+        assert_eq!(book.chapters[0].paragraphs[0].text, "Привет, мир");
+    }
+
+    #[test]
+    fn native_epub_uri_rejects_invalid_escapes_and_encoded_separators() {
+        assert!(resolve_archive_href("OPS/content.opf", "invalid%ZZ.xhtml").is_err());
+        assert!(resolve_archive_href("OPS/content.opf", "invalid%2.xhtml").is_err());
+        assert!(resolve_archive_href("OPS/content.opf", "%2Fetc.xhtml").is_err());
+        assert!(resolve_archive_href("OPS/content.opf", "%5Cetc.xhtml").is_err());
+        assert!(resolve_archive_href("OPS/content.opf", "%00null.xhtml").is_err());
+        assert!(resolve_archive_href("OPS/content.opf", "http://example.org/chapter.xhtml").is_err());
+        assert_eq!(
+            resolve_archive_href("OPS/book.opf", "chap%20one.xhtml#fragment").unwrap(),
+            "OPS/chap one.xhtml"
+        );
     }
 
     #[test]
