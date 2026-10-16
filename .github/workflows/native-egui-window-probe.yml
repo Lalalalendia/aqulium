@@ -26,6 +26,28 @@ jobs:
       - name: Test native input event routing
         run: cargo test --manifest-path aquilum-app/native-desktop/Cargo.toml -- --test-threads=1
 
+      - name: Link experimental native Windows executable
+        if: matrix.os == 'windows-latest'
+        run: cargo build --manifest-path aquilum-app/native-desktop/Cargo.toml
+      - name: Publish experimental native Windows executable and checksum
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exe = 'aquilum-app/native-desktop/target/debug/aquilum-native-desktop.exe'
+          if (!(Test-Path $exe)) { throw "Real native executable was not created" }
+          $hash = (Get-FileHash -Path $exe -Algorithm SHA256).Hash
+          "AQUILUM_NATIVE_WINDOWS_BINARY_SHA256 $hash"
+          "$hash  aquilum-native-desktop.exe" | Out-File -FilePath 'aquilum-app/native-desktop/preview.sha256' -Encoding ascii
+      - name: Upload Windows native OS-window preview
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aquilum-native-desktop-windows-preview
+          path: |
+            aquilum-app/native-desktop/target/debug/aquilum-native-desktop.exe
+            aquilum-app/native-desktop/preview.sha256
+          if-no-files-found: error
+
       - name: Launch and paint an actual Linux OS window in Xvfb
         if: matrix.os == 'ubuntu-latest'
         shell: bash
