@@ -32,7 +32,7 @@ fn now_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-fn parse_args() -> Result<(PathBuf, PathBuf), String> {
+fn parse_args() -> Result<(PathBuf, PathBuf, bool), String> {
     let mut args = std::env::args_os().skip(1);
     let Some(target) = args.next() else {
         return Err(
@@ -42,8 +42,11 @@ fn parse_args() -> Result<(PathBuf, PathBuf), String> {
     };
     let target = PathBuf::from(target);
     let mut app_data = std::env::temp_dir().join("aquilum-native-desktop-data");
+    let mut smoke_launch = false;
     while let Some(arg) = args.next() {
-        if arg == "--app-data" {
+        if arg == "--smoke-launch" {
+            smoke_launch = true;
+        } else if arg == "--app-data" {
             let value = args
                 .next()
                 .ok_or_else(|| "--app-data requires a directory".to_owned())?;
@@ -55,10 +58,10 @@ fn parse_args() -> Result<(PathBuf, PathBuf), String> {
     if !target.exists() {
         return Err(format!("workspace or note does not exist: {}", target.display()));
     }
-    Ok((target, app_data))
+    Ok((target, app_data, smoke_launch))
 }
 
-fn launch(target: &Path, app_data: &Path) -> Result<(), String> {
+fn launch(target: &Path, app_data: &Path, smoke_launch: bool) -> Result<(), String> {
     let (root, initial_note) = if target.is_dir() {
         (target.to_path_buf(), None)
     } else {
@@ -97,6 +100,9 @@ fn launch(target: &Path, app_data: &Path) -> Result<(), String> {
         scene: GpuiSceneGraph::default(),
         dragging_selection: false,
         error: None,
+        smoke_launch,
+        frames_painted: 0,
+        smoke_reported: false,
     };
     eframe::run_native(
         "Aquilum Native (experimental)",
@@ -184,6 +190,9 @@ struct NativeApp {
     scene: GpuiSceneGraph,
     dragging_selection: bool,
     error: Option<String>,
+    smoke_launch: bool,
+    frames_painted: u64,
+    smoke_reported: bool,
 }
 
 impl NativeApp {
@@ -405,6 +414,20 @@ impl eframe::App for NativeApp {
             );
         }
         self.paint_scene(ctx);
+        self.frames_painted += 1;
+        if self.smoke_launch && !self.smoke_reported && self.frames_painted >= 3 {
+            // The marker is emitted only after eframe has invoked the actual
+            // OS-backed render loop and the scene contains painted quads.
+            if !self.scene.quads.is_empty() {
+                println!(
+                    "AQUILUM_NATIVE_OS_WINDOW_SMOKE frames={} quads={}",
+                    self.frames_painted,
+                    self.scene.quads.len()
+                );
+                self.smoke_reported = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 
@@ -416,7 +439,9 @@ impl eframe::App for NativeApp {
 }
 
 fn main() {
-    if let Err(error) = parse_args().and_then(|(target, app_data)| launch(&target, &app_data)) {
+    if let Err(error) = parse_args()
+        .and_then(|(target, app_data, smoke_launch)| launch(&target, &app_data, smoke_launch))
+    {
         eprintln!("Aquilum native desktop: {error}");
         std::process::exit(1);
     }
