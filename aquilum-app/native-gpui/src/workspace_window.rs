@@ -539,7 +539,9 @@ mod tests {
     fn gpui_workspace_window_end_to_end_lifecycle() {
         let dir = tempfile::tempdir().unwrap();
         let sink = Arc::new(WinSink::default());
-        let core = Core::open(&dir.path().join("data"), Arc::clone(&sink) as Arc<dyn EventSink>);
+        let data_dir = dir.path().join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let core = Core::open(&data_dir, Arc::clone(&sink) as Arc<dyn EventSink>);
         let vault = dir.path().join("vault");
         fs::create_dir_all(&vault).unwrap();
 
