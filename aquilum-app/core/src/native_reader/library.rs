@@ -48,6 +48,9 @@ pub struct BookLibraryEntry {
     pub cfi: Option<String>,
     pub cover_url: Option<String>,
     pub cover_pattern: CoverPatternKind,
+    /// An unreadable book is kept in the library, but never assigned fake page counts.
+    /// Consumers should render a Needs review status and offer the original renderer.
+    pub parse_error: Option<String>,
 }
 
 pub struct BookLibraryController {
@@ -96,7 +99,7 @@ impl BookLibraryController {
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            let (title, author, total_paras) = match NativeBookReader::open(
+            let (title, author, total_paras, parse_error) = match NativeBookReader::open(
                 Arc::clone(&self.core),
                 workspace_id,
                 workspace_root,
@@ -105,14 +108,15 @@ impl BookLibraryController {
                 Ok(r) => {
                     let meta = &r.book().metadata;
                     let a = meta.authors.join(", ");
-                    (meta.title.clone(), a, r.book().total_paragraphs.max(1))
+                    (meta.title.clone(), a, r.book().total_paragraphs, None)
                 }
-                Err(_) => (
+                Err(error) => (
                     path.file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_else(|| "Book".to_owned()),
                     String::new(),
-                    100,
+                    0,
+                    Some(error),
                 ),
             };
 
@@ -122,7 +126,11 @@ impl BookLibraryController {
                 .load_reader_state(workspace_id, &rel)
                 .ok()
                 .flatten();
-            let progress_percent = saved.as_ref().map_or(0, |s| s.current.clamp(0, 100));
+            let progress_percent = if parse_error.is_some() {
+                0
+            } else {
+                saved.as_ref().map_or(0, |s| s.current.clamp(0, 100))
+            };
             let current_page = ((progress_percent as usize) * total_paras) / 100;
             let cfi = saved.and_then(|s| s.cfi);
 
@@ -146,6 +154,7 @@ impl BookLibraryController {
                 progress_percent,
                 cfi,
                 cover_url: None,
+                parse_error,
             });
         }
         entries.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
@@ -170,43 +179,92 @@ impl BookLibraryController {
             .to_string_lossy()
             .into_owned();
         let dest_book_path = dest_dir.join(&file_name);
-        if source_book_path != dest_book_path {
-            fs::copy(source_book_path, &dest_book_path).map_err(|e| e.to_string())?;
+        // Open exclusively: fs::copy silently overwrites a different book if
+        // the destination filename already exists (including symlinks).
+        let copied = source_book_path != dest_book_path;
+        if copied {
+            let mut source = fs::File::open(source_book_path)
+                .map_err(|e| format!("failed to open source book: {e}"))?;
+            let mut destination = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&dest_book_path)
+                .map_err(|e| format!("destination book already exists or cannot be created: {e}"))?;
+            if let Err(error) = std::io::copy(&mut source, &mut destination) {
+                drop(destination);
+                let _ = fs::remove_file(&dest_book_path);
+                return Err(format!("failed to copy book: {error}"));
+            }
         }
 
-        let reader = NativeBookReader::open(
-            Arc::clone(&self.core),
-            workspace_id,
-            workspace_root,
-            &dest_book_path,
-        )?;
-        let title = reader.book().metadata.title.clone();
-        let author = reader.book().metadata.authors.join(", ");
-        let total_pages = reader.book().total_paragraphs.max(1);
-        let book_rel = format!("{files_folder}/{file_name}");
+        // Roll back only a new copy if parsing or companion-note creation fails.
+        // Never delete or modify a previously existing library book.
+        let imported: Result<BookLibraryEntry, String> = (|| {
+            let reader = NativeBookReader::open(
+                Arc::clone(&self.core),
+                workspace_id,
+                workspace_root,
+                &dest_book_path,
+            )?;
+            let title = reader.book().metadata.title.clone();
+            let author = reader.book().metadata.authors.join(", ");
+            let total_pages = reader.book().total_paragraphs.max(1);
+            let book_rel = format!("{files_folder}/{file_name}");
 
-        let note_rel = format!("{title}.md");
-        let note_full = workspace_root.join(&note_rel);
-        let note_content = format!(
-            "---\nbook: \"{book_rel}\"\nauthor: \"{author}\"\npages: \"0/{total_pages}\"\nstatus: \"reading\"\n---\n# {title}\n\n> [!book] Конспект книги\n> Автор: **{author}**\n\n"
-        );
-        if !note_full.exists() {
-            gate::create(&self.core, &note_full, &note_content, Source::Me, None)
-                .map_err(|e| format!("{e:?}"))?;
+            // Book metadata is not a trusted filesystem path: remove separators,
+            // control characters and Windows-reserved filename characters.
+            let safe_stem: String = title
+                .chars()
+                .map(|character| {
+                    if character.is_control() || "/\\:*?\"<>|".contains(character) {
+                        '_'
+                    } else {
+                        character
+                    }
+                })
+                .collect();
+            let safe_stem = safe_stem.trim().trim_end_matches('.');
+            let safe_stem = if safe_stem.is_empty() { "Book" } else { safe_stem };
+            let note_rel = format!("{safe_stem}.md");
+            let note_full = workspace_root.join(&note_rel);
+
+            // Fail instead of binding an unrelated pre-existing note to this book.
+            if note_full.exists() {
+                let existing = fs::read_to_string(&note_full)
+                    .map_err(|e| format!("cannot read companion note: {e}"))?;
+                if !existing.lines().any(|line| line == format!("book: \"{book_rel}\"")) {
+                    return Err(format!("companion note already exists for another book: {note_rel}"));
+                }
+            } else {
+                let yaml_author = author
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace(['\r', '\n'], " ");
+                let note_content = format!(
+                    "---\nbook: \"{book_rel}\"\nauthor: \"{yaml_author}\"\npages: \"0/{total_pages}\"\nstatus: \"reading\"\n---\n# {title}\n\n> [!book] Конспект книги\n> Автор: **{author}**\n\n"
+                );
+                gate::create(&self.core, &note_full, &note_content, Source::Me, None)
+                    .map_err(|e| format!("{e:?}"))?;
+            }
+
+            Ok(BookLibraryEntry {
+                cover_pattern: CoverPatternKind::for_title(&title),
+                title,
+                author,
+                book_rel_path: book_rel,
+                companion_note_rel_path: Some(note_rel),
+                current_page: 0,
+                total_pages,
+                progress_percent: 0,
+                cfi: Some(reader.current_cfi()),
+                cover_url: None,
+                parse_error: None,
+            })
+        })();
+        if imported.is_err() && copied {
+            let _ = fs::remove_file(&dest_book_path);
         }
-
-        Ok(BookLibraryEntry {
-            cover_pattern: CoverPatternKind::for_title(&title),
-            title,
-            author,
-            book_rel_path: book_rel,
-            companion_note_rel_path: Some(note_rel),
-            current_page: 0,
-            total_pages,
-            progress_percent: 0,
-            cfi: Some(reader.current_cfi()),
-            cover_url: None,
-        })
+        imported
     }
 
     /// Synchronizes reading progress (`pages: "cur/total"`) into the companion BookPage note's
