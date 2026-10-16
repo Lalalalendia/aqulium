@@ -1,0 +1,85 @@
+name: Aquilum Native Sidebar Click and Save E2E
+
+on:
+  pull_request:
+    paths:
+      - 'aquilum-app/native-desktop/**'
+      - 'aquilum-app/native-gpui/**'
+      - 'aquilum-app/core/src/native_shell/**'
+      - '.github/workflows/native-desktop-sidebar-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  x11-sidebar-click:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Xvfb and XTest tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb xdotool scrot libxkbcommon-x11-0
+      - name: Open nested Markdown via physical sidebar clicks then save with Ctrl+S
+        shell: bash
+        run: |
+          set -euo pipefail
+          temp="$(mktemp -d)"
+          trap 'if [ -f "$temp/window.log" ]; then cp "$temp/window.log" native-sidebar-e2e.log; fi; if [ -f "$temp/sidebar.png" ]; then cp "$temp/sidebar.png" native-sidebar-e2e.png; fi; rm -rf "$temp"' EXIT
+          mkdir -p "$temp/vault/Заметки" "$temp/app-data"
+          printf '# Начальная глава\n' > "$temp/vault/Заметки/Документ.md"
+          export TEST_VAULT="$temp/vault"
+          export TEST_DATA="$temp/app-data"
+          export TEST_LOG="$temp/window.log"
+          export TEST_SCREENSHOT="$temp/sidebar.png"
+          export LIBGL_ALWAYS_SOFTWARE=1
+          xvfb-run -a timeout 300s bash -c '
+            set -euo pipefail
+            RUST_BACKTRACE=1 cargo run --locked \
+              --manifest-path aquilum-app/native-desktop/Cargo.toml \
+              -- "$TEST_VAULT" --app-data "$TEST_DATA" > "$TEST_LOG" 2>&1 &
+            app_pid=$!
+            trap "kill $app_pid 2>/dev/null || true" EXIT
+            window_id=""
+            for attempt in $(seq 1 90); do
+              window_id="$(xdotool search --onlyvisible --name "Aquilum Native" | head -n 1 || true)"
+              if [ -n "$window_id" ]; then break; fi
+              if ! kill -0 "$app_pid" 2>/dev/null; then cat "$TEST_LOG"; exit 1; fi
+              sleep 1
+            done
+            if [ -z "$window_id" ]; then echo "Native OS window did not open"; cat "$TEST_LOG"; exit 1; fi
+            xdotool windowfocus --sync "$window_id"
+            # Default 1.0x scene: first folder row y=50..76, expanded note row y=78..104.
+            xdotool mousemove --window "$window_id" 75 63 click 1
+            sleep 0.8
+            xdotool mousemove --window "$window_id" 75 91 click 1
+            sleep 0.8
+            xdotool type --clearmodifiers --delay 30 "NATIVE_NESTED_SIDEBAR_SENTINEL"
+            xdotool key --clearmodifiers ctrl+s
+            for attempt in $(seq 1 60); do
+              if grep -q NATIVE_NESTED_SIDEBAR_SENTINEL "$TEST_VAULT/Заметки/Документ.md"; then break; fi
+              sleep 0.2
+            done
+            if ! grep -q NATIVE_NESTED_SIDEBAR_SENTINEL "$TEST_VAULT/Заметки/Документ.md"; then
+              echo "Physical sidebar folder/file click did not open and save nested note" >&2
+              cat "$TEST_LOG"
+              exit 1
+            fi
+            scrot "$TEST_SCREENSHOT"
+            test -s "$TEST_SCREENSHOT"
+            echo "AQUILUM_NATIVE_SIDEBAR_NAVIGATION_E2E_PASSED"
+            xdotool windowclose "$window_id" || true
+            sleep 1
+          '
+      - name: Upload actual UI capture and diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sidebar-x11-e2e-evidence
+          path: |
+            native-sidebar-e2e.log
+            native-sidebar-e2e.png
+          if-no-files-found: warn
