@@ -20,13 +20,13 @@ jobs:
       - name: Install virtual display and XTest keyboard tooling
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb xdotool libxkbcommon-x11-0
+          sudo apt-get install -y --no-install-recommends xvfb xdotool scrot libxkbcommon-x11-0
       - name: Open real window, type with XTest, save and inspect disk
         shell: bash
         run: |
           set -euo pipefail
           vault="$(mktemp -d)"
-          trap 'if [ -f "$vault/window.log" ]; then cp "$vault/window.log" native-desktop-x11-e2e.log; fi; rm -rf "$vault"' EXIT
+          trap 'if [ -f "$vault/window.log" ]; then cp "$vault/window.log" native-desktop-x11-e2e.log; fi; if [ -f "$vault/native-window.png" ]; then cp "$vault/native-window.png" native-desktop-x11-e2e.png; fi; rm -rf "$vault"' EXIT
           printf '# Physical keyboard smoke\n' > "$vault/Entry.md"
           export VAULT="$vault"
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -67,6 +67,11 @@ jobs:
               exit 1
             fi
             echo "AQUILUM_NATIVE_OS_INPUT_SAVE_E2E_PASSED"
+            # Capture a real X11 framebuffer after typing and saving, before exit.
+            sleep 0.5
+            scrot -q 90 "$VAULT/native-window.png"
+            test -s "$VAULT/native-window.png"
+            echo "AQUILUM_NATIVE_OS_VISUAL_CAPTURE_READY"
             xdotool windowclose "$window_id" || true
             sleep 1
           '
@@ -75,5 +80,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: native-desktop-x11-input-e2e-log
-          path: native-desktop-x11-e2e.log
+          path: |
+            native-desktop-x11-e2e.log
+            native-desktop-x11-e2e.png
           if-no-files-found: warn
