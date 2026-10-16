@@ -4,6 +4,7 @@
 
 pub mod library;
 pub mod mobi_azw3;
+pub mod epub_archive;
 pub use library::{BookLibraryController, BookLibraryEntry, CoverPatternKind};
 use crate::app_core::Core;
 use crate::ui_state::models::SaveReaderStateInput;
@@ -79,10 +80,14 @@ impl NativeBookReader {
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_default();
 
-        if ext == "epub" {
-            return Err("Native EPUB ZIP parsing is not implemented yet; use the existing book renderer".to_owned());
-        }
-        let book = if ext == "mobi" || ext == "azw3" {
+        let book = if ext == "epub" {
+            let size = fs::metadata(book_path).map_err(|e| format!("cannot inspect EPUB: {e}"))?.len();
+            if size > 128 * 1024 * 1024 {
+                return Err("EPUB compressed input exceeds 128 MiB safety limit".to_owned());
+            }
+            let bytes = fs::read(book_path).map_err(|e| format!("failed to read EPUB: {e}"))?;
+            epub_archive::parse_epub_zip_bytes(book_path, &relative_path, &bytes)?
+        } else if ext == "mobi" || ext == "azw3" {
             let bytes = fs::read(book_path).map_err(|e| format!("failed to read book: {e}"))?;
             let format = if ext == "mobi" { BookFormat::Mobi } else { BookFormat::Azw3 };
             mobi_azw3::parse_mobi_or_azw3_bytes(book_path, &relative_path, &bytes, format)?
