@@ -59,7 +59,7 @@ impl BookLibraryController {
         Self { core }
     }
 
-    /// Scans the workspace for `.fb2` / `.epub` books and companion BookPage notes,
+    /// Scans the workspace for supported book extensions and companion BookPage notes,
     /// combining metadata with `UiStateService::load_reader_state`.
     pub fn list_books(&self, workspace_root: &Path, workspace_id: Uuid) -> Vec<BookLibraryEntry> {
         let mut entries = Vec::new();
@@ -86,7 +86,7 @@ impl BookLibraryController {
             else {
                 continue;
             };
-            if ext != "fb2" && ext != "epub" {
+            if !matches!(ext.as_str(), "fb2" | "epub" | "mobi" | "azw3") {
                 continue;
             }
 
@@ -152,7 +152,7 @@ impl BookLibraryController {
         entries
     }
 
-    /// Imports an external `.fb2` or `.epub` file into the workspace's `files.folder` (`Files/`)
+    /// Imports a supported book into the workspace's `files.folder` (`Files/`)
     /// and creates its companion Markdown BookPage note with `book`, `author`, `pages` frontmatter.
     pub fn import_book_and_create_page(
         &self,
