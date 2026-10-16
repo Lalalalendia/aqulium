@@ -1,0 +1,27 @@
+name: Aquilum Native OS Window (experimental)
+
+on:
+  pull_request:
+    paths:
+      - 'aquilum-app/native-desktop/**'
+      - '.github/workflows/native-egui-window-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-os-window:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile real eframe/winit OS-window binary
+        run: cargo check --manifest-path aquilum-app/native-desktop/Cargo.toml
+      - name: Test native input event routing
+        run: cargo test --manifest-path aquilum-app/native-desktop/Cargo.toml -- --test-threads=1
