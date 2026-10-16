@@ -399,6 +399,16 @@ impl eframe::App for NativeApp {
         for event in events {
             self.handle_event(ctx, event);
         }
+        // eframe 0.29 exposes frame-local scroll delta outside raw Event
+        // matching. Translate physical wheel/trackpad movement into bounded
+        // viewport scrolling when a document editor is active.
+        let wheel_y = ctx.input(|input| input.raw_scroll_delta.y);
+        if wheel_y.abs() >= 1.0 {
+            let lines = (wheel_y.abs() / 24.0).round().max(1.0) as isize;
+            self.dispatch(GpuiWindowAction::Editor(GpuiEditorAction::ScrollLines {
+                delta_lines: if wheel_y > 0.0 { -lines } else { lines },
+            }));
+        }
         if let Some(window) = &mut self.window {
             let rect = ctx.input(|input| input.screen_rect());
             let width = rect.width().max(320.0);
