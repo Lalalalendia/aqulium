@@ -87,6 +87,71 @@ impl GpuiSceneGraph {
     }
 }
 
+/// Paint the selection behind glyphs and a visible caret in the scene.
+/// Coordinates are approximate until the native text shaping engine exports
+/// per-grapheme advances; selection positions use Unicode scalar offsets.
+fn push_editor_caret_and_selection(
+    scene: &mut GpuiSceneGraph,
+    text: &str,
+    caret: Option<usize>,
+    selection: Option<(usize, usize)>,
+    text_x: f32,
+    text_y: f32,
+    line_h: f32,
+    char_advance: f32,
+    max_visible_lines: usize,
+    accent: (u8, u8, u8),
+    background: (u8, u8, u8),
+) {
+    let highlight = (
+        ((u16::from(accent.0) + 3 * u16::from(background.0)) / 4) as u8,
+        ((u16::from(accent.1) + 3 * u16::from(background.1)) / 4) as u8,
+        ((u16::from(accent.2) + 3 * u16::from(background.2)) / 4) as u8,
+    );
+    let mut line_start = 0usize;
+    // split('\n') includes the final empty line, unlike str::lines().
+    for (index, line) in text.split('\n').enumerate().take(max_visible_lines) {
+        let n = line.chars().count();
+        let line_end = line_start.saturating_add(n);
+        let top = text_y + index as f32 * line_h;
+
+        if let Some((start, end)) = selection {
+            let visible_start = start.max(line_start);
+            let visible_end = end.min(line_end);
+            if visible_start < visible_end {
+                scene.quads.push(SceneQuad {
+                    bounds: RectPx {
+                        x: text_x + (visible_start - line_start) as f32 * char_advance,
+                        y: top,
+                        width: (visible_end - visible_start) as f32 * char_advance,
+                        height: line_h,
+                    },
+                    bg_rgb: highlight,
+                    border_rgb: None,
+                    corner_radius_px: 0.0,
+                });
+            }
+        }
+
+        if let Some(position) = caret {
+            if (line_start..=line_end).contains(&position) {
+                let x = text_x + (position - line_start) as f32 * char_advance;
+                scene.lines.push(SceneLine {
+                    x1: x,
+                    y1: top,
+                    x2: x,
+                    y2: top + line_h,
+                    stroke_width_px: 1.5,
+                    color_rgb: accent,
+                });
+            }
+        }
+        // Each split component except the last is terminated by one Unicode
+        // newline character, which occupies one editor-char offset.
+        line_start = line_end.saturating_add(1);
+    }
+}
+
 pub fn build_window_scene(
     frame: &GpuiWindowLayoutFrame,
     palette: ThemePalette,
@@ -228,7 +293,22 @@ pub fn build_window_scene(
             let text_x = center_rect.x + 48.0 * zoom;
             let mut text_y = center_rect.y + 20.0 * zoom;
             let max_visible_lines = ((center_rect.height / line_h) as usize).max(1);
-            for (idx, line) in ed_frame.viewport.text.lines().take(max_visible_lines).enumerate() {
+            if frame.modal == GpuiModalOverlay::None {
+                push_editor_caret_and_selection(
+                    &mut scene,
+                    &ed_frame.viewport.text,
+                    ed_frame.viewport.selection.caret_char_in_viewport,
+                    ed_frame.viewport.selection.visible_range_chars,
+                    text_x,
+                    text_y,
+                    line_h,
+                    15.0 * zoom * 0.55,
+                    max_visible_lines,
+                    palette.accent_rgb,
+                    palette.bg_primary,
+                );
+            }
+            for (idx, line) in ed_frame.viewport.text.split('\n').take(max_visible_lines).enumerate() {
                 let doc_line_num = ed_frame.viewport.start_line + idx + 1;
                 scene.text_runs.push(SceneTextRun {
                     x: center_rect.x + 12.0 * zoom,
@@ -344,4 +424,66 @@ pub fn build_window_scene(
     }
 
     scene
+}
+
+
+#[cfg(test)]
+mod native_cursor_tests {
+    use super::*;
+
+    fn annotated_scene(
+        text: &str,
+        caret: Option<usize>,
+        range: Option<(usize, usize)>,
+    ) -> GpuiSceneGraph {
+        let mut scene = GpuiSceneGraph::default();
+        push_editor_caret_and_selection(
+            &mut scene,
+            text,
+            caret,
+            range,
+            100.0,
+            20.0,
+            24.0,
+            10.0,
+            8,
+            (255, 100, 0),
+            (0, 0, 0),
+        );
+        scene
+    }
+
+    #[test]
+    fn native_caret_on_empty_and_trailing_newline_is_visible() {
+        let empty = annotated_scene("", Some(0), None);
+        assert_eq!(empty.lines.len(), 1);
+        assert_eq!(empty.lines[0].x1, 100.0);
+        assert_eq!(empty.lines[0].y1, 20.0);
+
+        let trailing = annotated_scene("Первая\n", Some(7), None);
+        assert_eq!(trailing.lines.len(), 1);
+        assert_eq!(trailing.lines[0].x1, 100.0);
+        assert_eq!(trailing.lines[0].y1, 44.0);
+    }
+
+    #[test]
+    fn native_selection_handles_unicode_and_two_lines() {
+        // Unicode scalars, not UTF-8 byte offsets; includes Cyrillic and emoji.
+        let scene = annotated_scene("Ж🙂Т\nМир", Some(5), Some((1, 6)));
+        assert_eq!(scene.quads.len(), 2);
+        assert_eq!(scene.quads[0].bounds.x, 110.0);
+        assert_eq!(scene.quads[0].bounds.width, 20.0);
+        assert_eq!(scene.quads[1].bounds.x, 100.0);
+        assert_eq!(scene.quads[1].bounds.width, 20.0);
+        assert_eq!(scene.lines.len(), 1);
+        assert_eq!(scene.lines[0].x1, 110.0);
+        assert_eq!(scene.lines[0].y1, 44.0);
+    }
+
+    #[test]
+    fn native_selection_does_not_draw_offscreen_caret() {
+        let scene = annotated_scene("abc", Some(100), Some((100, 110)));
+        assert!(scene.quads.is_empty());
+        assert!(scene.lines.is_empty());
+    }
 }

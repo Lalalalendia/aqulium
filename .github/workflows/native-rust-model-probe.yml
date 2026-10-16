@@ -23,6 +23,8 @@ jobs:
         run: cargo check --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core -p aquilum-native-gpui
       - name: Run native editor and shell unit tests
         run: cargo test --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core --release native_ -- --test-threads=1
+      - name: Run scene, caret and native window controller tests
+        run: cargo test --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui -- --test-threads=1
       - name: Verify model smoke (not GUI parity)
         run: cargo run --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui -- --verify-model-smoke
       - name: Verify cutover gate fails closed
@@ -49,4 +51,9 @@ jobs:
         shell: pwsh
         run: |
           cargo test --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-core --release native_ -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run scene, caret and native window controller tests
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path aquilum-app/src-tauri/Cargo.toml -p aquilum-native-gpui -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
